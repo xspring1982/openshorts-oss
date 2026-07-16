@@ -1,5 +1,7 @@
 import React from 'react';
 import { Sparkles, Zap, Globe, FileVideo, Subtitles, Youtube, Instagram, Shield, Github, ArrowRight, Play, Check, ChevronDown, Monitor, Cpu, Languages, Type, Upload, Scissors } from 'lucide-react';
+import PricingSection from './components/PricingSection';
+import { useAuth } from './contexts/AuthContext';
 
 const TikTokIcon = ({ size = 16, className = "" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -56,6 +58,7 @@ const FAQItem = ({ question, answer, isOpen, onClick }) => (
 );
 
 export default function Landing({ onLaunchApp }) {
+  const { billingEnabled } = useAuth();
   const [openFaq, setOpenFaq] = React.useState(null);
 
   const features = [
@@ -136,7 +139,7 @@ export default function Landing({ onLaunchApp }) {
     },
     {
       question: "Is OpenShorts really free? What's the catch?",
-      answer: "OpenShorts is 100% free and open source. You self-host it using Docker on your own machine or server. It uses three external APIs — all with free tiers. Google Gemini API (required) powers the AI analysis, viral moment detection, and thumbnail generation — its free tier includes 1,500 requests per day. ElevenLabs API (optional) enables AI voice dubbing in 30+ languages — free tier included. Upload-Post API (optional) is a social media API that allows direct publishing to YouTube, TikTok, and Instagram — 10 free uploads/month, no credit card required. There are no watermarks, no usage limits, no monthly subscriptions, and no per-video fees — unlike Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
+      answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it's a paid service with a 3-day free trial, then plans from $12/mo for 100 minutes of video. So: free if you self-host, paid if you want us to host it for you. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
     },
     {
       question: "How does OpenShorts compare to Opus Clip?",
@@ -199,6 +202,7 @@ export default function Landing({ onLaunchApp }) {
           <div className="hidden md:flex items-center gap-8 text-sm text-zinc-400">
             <a href="#features" className="hover:text-white transition-colors">Features</a>
             <a href="#how-it-works" className="hover:text-white transition-colors">How It Works</a>
+            {billingEnabled && <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>}
             <a href="#comparison" className="hover:text-white transition-colors">Comparison</a>
             <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
           </div>
@@ -259,6 +263,11 @@ export default function Landing({ onLaunchApp }) {
             </a>
           </div>
 
+          <p className="text-sm text-zinc-500 mb-12">
+            <strong className="text-zinc-300">Free to self-host</strong> with Docker (bring your own keys) ·
+            or use it here with no setup — <strong className="text-zinc-300">3-day free trial, then from $12/mo</strong>
+          </p>
+
           {/* Platform Icons */}
           <div className="flex items-center justify-center gap-6 text-zinc-500">
             <span className="text-sm">Export to:</span>
@@ -301,6 +310,63 @@ export default function Landing({ onLaunchApp }) {
           </div>
         </div>
       </section>
+
+      {/* Two ways to use it: free self-host vs paid hosted */}
+      <section className="py-16 px-6">
+        <div className="max-w-4xl mx-auto text-center mb-10">
+          <h2 className="text-3xl md:text-4xl font-bold mb-3">Two ways to use OpenShorts</h2>
+          <p className="text-zinc-400 max-w-2xl mx-auto">Run it yourself for free, or let us run everything for you.</p>
+        </div>
+        <div className="max-w-4xl mx-auto grid md:grid-cols-2 gap-6">
+          <div className="bg-surface/50 border border-white/10 rounded-2xl p-8 flex flex-col">
+            <div className="flex items-center gap-2 mb-2">
+              <Github size={20} className="text-zinc-300" />
+              <h3 className="text-xl font-bold text-white">Self-hosted</h3>
+              <span className="text-[10px] bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded text-green-400 uppercase tracking-wider">Free</span>
+            </div>
+            <p className="text-zinc-400 text-sm leading-relaxed mb-5 flex-1">
+              100% free and open source. Run it with Docker on your own machine, bring your own API keys,
+              no limits, no subscription. Best if you're technical and want full control.
+            </p>
+            <a href="https://github.com/mutonby/openshorts" target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white px-5 py-3 rounded-xl font-medium transition-all">
+              <Github size={18} /> Get it on GitHub
+            </a>
+          </div>
+          <div className="bg-primary/5 border border-primary/30 rounded-2xl p-8 flex flex-col">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles size={20} className="text-primary" />
+              <h3 className="text-xl font-bold text-white">Hosted on openshorts.app</h3>
+              <span className="text-[10px] bg-primary/10 border border-primary/30 px-2 py-0.5 rounded text-primary uppercase tracking-wider">From $12/mo</span>
+            </div>
+            <p className="text-zinc-400 text-sm leading-relaxed mb-5 flex-1">
+              Zero setup, no API keys — we run all the AI and compute for you, and every clip you make is saved
+              to your private library. Sign in with email or Google. <b>3-day free trial</b>, then a plan from
+              $12/mo (100 min). Best if you just want to make clips without any technical hassle.
+            </p>
+            <a href="#pricing"
+              className="inline-flex items-center justify-center gap-2 bg-primary hover:bg-blue-600 text-white px-5 py-3 rounded-xl font-medium transition-all">
+              See plans <ArrowRight size={18} />
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Section — hosted plans (self-host stays free) */}
+      {billingEnabled && (
+        <section id="pricing" className="py-20 px-6 bg-surface/20">
+          <div className="max-w-6xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Simple, transparent pricing</h2>
+              <p className="text-zinc-400 max-w-2xl mx-auto">
+                Same features on every plan — you only pay for volume. Start with a 3-day free trial (card required,
+                20 free minutes), cancel anytime. Prefer to self-host? It stays free forever.
+              </p>
+            </div>
+            <PricingSection onRequireLogin={() => { window.location.hash = '#/pricing'; }} />
+          </div>
+        </section>
+      )}
 
       {/* 3 Tools in 1 Section */}
       <section className="py-20 px-6">

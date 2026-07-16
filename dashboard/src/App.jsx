@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -9,6 +9,16 @@ import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import UsageMeter from './components/UsageMeter';
+import TopUpModal from './components/TopUpModal';
+import TrialUpgradeModal from './components/TrialUpgradeModal';
+import LoginModal from './components/LoginModal';
+import TrialGate from './components/TrialGate';
+import AdvancedBanner from './components/AdvancedBanner';
+import HistoryTab from './components/HistoryTab';
+import ProfileMenu from './components/ProfileMenu';
+import { useAuth } from './contexts/AuthContext';
+import { apiFetch, apiJson, QuotaError } from './lib/api';
 import { getApiUrl } from './config';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
@@ -128,12 +138,19 @@ const SESSION_MAX_AGE = 3600000; // 1 hour (matches server job retention)
 
 // Mock polling function
 const pollJob = async (jobId) => {
-  const res = await fetch(getApiUrl(`/api/status/${jobId}`));
+  const res = await apiFetch(`/api/status/${jobId}`);
   if (!res.ok) throw new Error('Status check failed');
   return res.json();
 };
 
 function App() {
+  // Cloud auth/billing session (inert when billing is disabled).
+  const { billingEnabled, isManaged, isSignedIn, signingIn, me, plan, refreshMe } = useAuth();
+  const [showLogin, setShowLogin] = useState(false);
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [showTrialUpgrade, setShowTrialUpgrade] = useState(false);
+  const [topUpInfo, setTopUpInfo] = useState({});
+
   const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
   // Social API State - Load encrypted or plain
   const [uploadPostKey, setUploadPostKey] = useState(() => {
@@ -320,8 +337,34 @@ function App() {
     }
   };
 
+  // Hosted is paid-only (no BYOK core). Self-host uses BYOK keys.
+  // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
+  const keysMissing = !billingEnabled && (!apiKey || !uploadPostKey);
+  const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
+  // Included in the plan (fully managed, no keys): Clip Generator + YouTube Studio.
+  // Advanced (bring your own fal.ai + ElevenLabs keys): AI Shorts + AI Agent.
+  const INCLUDED_TOOL_TABS = ['dashboard', 'thumbnails'];
+  const ADVANCED_TOOL_TABS = ['saasshorts', 'ai-agent'];
+  const TOOL_NAMES = { dashboard: 'the Clip Generator', thumbnails: 'the YouTube Studio' };
+  const gateThisTab = needsPlan && INCLUDED_TOOL_TABS.includes(activeTab);      // included tool, no plan yet
+  const advancedThisTab = billingEnabled && ADVANCED_TOOL_TABS.includes(activeTab); // BYOK-notice tools
+
+  // Managed users connect their socials via Upload-Post's branded hosted page.
+  const handleConnectSocials = async () => {
+    try {
+      const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });
+      if (access_url) window.open(access_url, '_blank', 'noopener');
+    } catch (e) {
+      alert('Could not open the connection page. Please try again.');
+    }
+  };
+
   const handleProcess = async (data) => {
-    if (!apiKey || !uploadPostKey) {
+    // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
+    if (billingEnabled) {
+      if (!isSignedIn) { setShowLogin(true); return; }
+      if (!isManaged) { window.location.hash = '#/pricing'; return; }
+    } else if (keysMissing) {
       setShowKeyModal(true);
       return;
     }
@@ -332,7 +375,9 @@ function App() {
 
     try {
       let body;
-      const headers = { 'X-Gemini-Key': apiKey };
+      // BYOK sends the Gemini header; managed users rely on the bearer token
+      // that apiFetch attaches automatically.
+      const headers = apiKey ? { 'X-Gemini-Key': apiKey } : {};
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
@@ -344,17 +389,25 @@ function App() {
         body = formData;
       }
 
-      const res = await fetch(getApiUrl('/api/process'), {
-        method: 'POST',
-        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey },
-        body
-      });
+      const res = await apiFetch('/api/process', { method: 'POST', headers, body });
 
       if (!res.ok) throw new Error(await res.text());
       const resData = await res.json();
       setJobId(resData.job_id);
 
     } catch (e) {
+      if (e instanceof QuotaError) {
+        setStatus('idle');
+        // Trial users hit the trial minute cap → prompt them to activate the plan
+        // now (unlocks full minutes). Active users → offer a top-up.
+        if (me?.status === 'trialing') {
+          setShowTrialUpgrade(true);
+        } else {
+          setTopUpInfo({ required: e.minutesRequired, remaining: e.minutesRemaining });
+          setShowTopUp(true);
+        }
+        return;
+      }
       setStatus('error');
       setLogs(l => [...l, `Error starting job: ${e.message}`]);
     }
@@ -421,6 +474,16 @@ function App() {
           <span className="font-medium hidden lg:block">YouTube Studio</span>
         </button>
 
+        {billingEnabled && isSignedIn && (
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'history' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+          >
+            <History size={20} />
+            <span className="font-medium hidden lg:block">History</span>
+          </button>
+        )}
+
         {/* <button
           onClick={() => setActiveTab('gallery')}
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'gallery' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
@@ -466,6 +529,32 @@ function App() {
             <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">Free & Community Driven</p>
           </div>
         </a>
+        {billingEnabled && (
+          <a
+            href="#/pricing"
+            className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
+          >
+            <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
+              <Sparkles size={16} />
+            </div>
+            <div className="hidden lg:block overflow-hidden">
+              <p className="text-sm font-bold text-white leading-none mb-0.5">Plans &amp; Pricing</p>
+              <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">View all plans</p>
+            </div>
+          </a>
+        )}
+        <a
+          href="mailto:info@openshorts.app"
+          className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
+        >
+          <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
+            <Mail size={16} />
+          </div>
+          <div className="hidden lg:block overflow-hidden">
+            <p className="text-sm font-bold text-white leading-none mb-0.5">Support</p>
+            <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">info@openshorts.app</p>
+          </div>
+        </a>
       </div>
     </div>
   );
@@ -503,11 +592,29 @@ function App() {
               />
             )}
 
-            {(!apiKey || !uploadPostKey) && (
+            {/* Cloud: minutes meter + account/sign-in */}
+            {billingEnabled && isManaged && (
+              <UsageMeter onClick={() => { window.location.hash = '#/account'; }} />
+            )}
+            {billingEnabled && isSignedIn && !isManaged && (
+              <button onClick={() => { window.location.hash = '#/pricing'; }}
+                className="text-xs text-primary bg-primary/10 hover:bg-primary/20 px-3 py-1 rounded-full border border-primary/30 transition-colors">
+                Start free trial
+              </button>
+            )}
+            {billingEnabled && !isSignedIn && (
+              <button onClick={() => setShowLogin(true)}
+                className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full transition-colors">
+                Sign in
+              </button>
+            )}
+            {billingEnabled && isSignedIn && <ProfileMenu />}
+
+            {keysMissing && (
               <button
-                onClick={() => setActiveTab('settings')}
+                onClick={() => (billingEnabled && !isSignedIn ? setShowLogin(true) : setActiveTab('settings'))}
                 className="text-xs text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30 transition-colors flex items-center gap-1.5"
-                title="Click to configure your API keys"
+                title="Configure API keys or choose a plan"
               >
                 <AlertTriangle size={12} />
                 {!apiKey && !uploadPostKey
@@ -521,7 +628,7 @@ function App() {
         </header>
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
-        {(!apiKey || !uploadPostKey) && activeTab !== 'settings' && (
+        {keysMissing && activeTab !== 'settings' && (
           <div className="mx-6 mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
             <div className="flex items-center gap-3 text-sm text-amber-200">
               <KeyRound size={16} className="shrink-0 text-amber-400" />
@@ -559,6 +666,12 @@ function App() {
           </div>
         )}
 
+        {/* Included tools (Clip Generator, YouTube Studio): non-blocking trial prompt. */}
+        {gateThisTab && <TrialGate toolName={TOOL_NAMES[activeTab] || 'this'} />}
+
+        {/* Advanced tools (AI Shorts, AI Agent): BYOK fal.ai + ElevenLabs notice. */}
+        {advancedThisTab && <AdvancedBanner needsPlan={needsPlan} onKeys={() => setActiveTab('settings')} />}
+
         {/* Main Workspace */}
         <div className="flex-1 overflow-hidden relative">
 
@@ -571,6 +684,36 @@ function App() {
                   <Shield size={12} /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              {isManaged ? (
+                <div className="glass-panel p-6 mb-2">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-semibold">Included in your plan</h2>
+                    <span className="text-[10px] bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded text-green-400 uppercase tracking-wider">Managed</span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
+                    Your plan includes the <strong>Clip Generator</strong> and <strong>YouTube Studio</strong>,
+                    fully managed — no API keys required. AI Shorts &amp; dubbing use your own fal.ai / ElevenLabs
+                    keys (below). Connect your social accounts to publish directly.
+                  </p>
+                  <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
+                    <Share2 size={16} /> Connect social accounts
+                  </button>
+                </div>
+              ) : billingEnabled ? (
+                <div className="glass-panel p-6 mb-2 border-primary/30 ring-1 ring-primary/20">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-semibold">Start your free trial</h2>
+                    <span className="text-[10px] bg-primary/10 border border-primary/30 px-2 py-0.5 rounded text-primary uppercase tracking-wider">3 days free</span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
+                    Generate shorts with zero setup — no API keys needed. 3 days free, then from $12/mo. Cancel anytime.
+                  </p>
+                  <button onClick={() => { window.location.hash = '#/pricing'; }} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
+                    <Sparkles size={16} /> See plans & start trial
+                  </button>
+                </div>
+              ) : (
+                <>
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className={`glass-panel p-6 mt-8 ${!uploadPostKey ? 'border-amber-500/30 ring-1 ring-amber-500/20' : ''}`}>
@@ -620,14 +763,17 @@ function App() {
                 </div>
               </div>
 
+                </>
+              )}
+
               <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">Video Translation</h2>
-                  <span className="text-[10px] bg-white/5 border border-white/5 px-2 py-0.5 rounded text-zinc-500 uppercase tracking-wider">Optional</span>
+                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Your own key</span>
                 </div>
                 <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
-                  Translate your clips to different languages using <strong>ElevenLabs</strong> AI dubbing.
-                  Automatically translates speech while preserving the original voice characteristics.
+                  For <strong>AI Shorts &amp; dubbing</strong> — bring your own key. Translate your clips to different
+                  languages using <strong>ElevenLabs</strong> AI dubbing (billed by ElevenLabs). Not covered by your plan.
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-zinc-400">ElevenLabs API Key</label>
@@ -674,11 +820,12 @@ function App() {
               <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">AI Shorts (UGC Videos)</h2>
-                  <span className="text-[10px] bg-violet-500/10 border border-violet-500/20 px-2 py-0.5 rounded text-violet-400 uppercase tracking-wider">New</span>
+                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Your own key</span>
                 </div>
                 <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
                   Generate UGC-style videos with AI actors for any product or business using <strong>fal.ai</strong>.
-                  Just describe your product or paste a URL. Requires fal.ai + ElevenLabs API keys.
+                  <strong> Not covered by your plan</strong> — bring your own fal.ai + ElevenLabs keys (billed by those
+                  providers, ~$0.65-2 per video). Your plan still covers the AI script &amp; orchestration.
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-zinc-400">fal.ai API Key</label>
@@ -726,7 +873,7 @@ function App() {
 
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} />
           )}
 
           {/* View: AI Agent */}
@@ -851,8 +998,10 @@ function App() {
           )}
 
           {/* View: Thumbnails */}
+          {activeTab === 'history' && <HistoryTab />}
+
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} />
           )}
 
           {/* View: Gallery */}
@@ -1106,6 +1255,22 @@ function App() {
         uploadPostKey={uploadPostKey}
         uploadUserId={uploadUserId}
       />
+
+      {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
+      {showTopUp && (
+        <TopUpModal
+          onClose={() => setShowTopUp(false)}
+          required={topUpInfo.required}
+          remaining={topUpInfo.remaining}
+        />
+      )}
+      {showTrialUpgrade && (
+        <TrialUpgradeModal
+          plan={plan}
+          onActivated={refreshMe}
+          onClose={() => setShowTrialUpgrade(false)}
+        />
+      )}
     </div>
   );
 }
