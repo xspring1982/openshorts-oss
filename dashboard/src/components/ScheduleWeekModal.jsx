@@ -65,7 +65,7 @@ function detectTimezone() {
     }
 }
 
-export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId }) {
+export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId, isManaged }) {
     const [time, setTime] = useState('12:00');
     const [timezone, setTimezone] = useState(detectTimezone);
     const [platforms, setPlatforms] = useState({
@@ -104,8 +104,11 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
 
     const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
 
+    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
+    const canPost = isManaged || (uploadPostKey && uploadUserId);
+
     const handleScheduleAll = async () => {
-        if (!uploadPostKey || !uploadUserId) return;
+        if (!canPost) return;
         if (selectedPlatforms.length === 0) return;
 
         setScheduling(true);
@@ -183,7 +186,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     </div>
                 </div>
 
-                {!uploadPostKey && (
+                {!canPost && (
                     <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 text-xs rounded-lg flex items-start gap-2">
                         <AlertCircle size={14} className="mt-0.5 shrink-0" />
                         <div>Configura tu API Key de Upload-Post en Settings primero.</div>
@@ -356,7 +359,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     {!done ? (
                         <button
                             onClick={handleScheduleAll}
-                            disabled={scheduling || !uploadPostKey || selectedPlatforms.length === 0}
+                            disabled={scheduling || !canPost || selectedPlatforms.length === 0}
                             className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
                             {scheduling ? (

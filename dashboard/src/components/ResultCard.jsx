@@ -7,7 +7,7 @@ import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -326,8 +326,11 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
         }
     };
 
+    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
+    const canPost = isManaged || (uploadPostKey && uploadUserId);
+
     const handlePost = async () => {
-        if (!uploadPostKey || !uploadUserId) {
+        if (!canPost) {
             setPostResult({ success: false, msg: "Missing API Key or User ID." });
             return;
         }
@@ -570,7 +573,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
                         <h3 className="text-lg font-bold text-white mb-4">Post / Schedule</h3>
 
-                        {!uploadPostKey && (
+                        {!canPost && (
                             <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 text-xs rounded-lg flex items-start gap-2">
                                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                                 <div>Configure API Key in Settings first.</div>
@@ -658,7 +661,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
                         <button
                             onClick={handlePost}
-                            disabled={posting || !uploadPostKey}
+                            disabled={posting || !canPost}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
                             {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}

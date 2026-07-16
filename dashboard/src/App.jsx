@@ -1167,6 +1167,7 @@ function App() {
                           uploadUserId={uploadUserId}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
+                          isManaged={isManaged}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
                         />
@@ -1293,6 +1294,7 @@ function App() {
         jobId={jobId}
         uploadPostKey={uploadPostKey}
         uploadUserId={uploadUserId}
+        isManaged={isManaged}
       />
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
