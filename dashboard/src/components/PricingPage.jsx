@@ -131,19 +131,7 @@ export default function PricingPage({ onRequireLogin }) {
       <section className="px-6 pb-16">
         <div className="max-w-4xl mx-auto">
           <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-5 md:gap-6">
-            <DemoFigure src="/demo/clip-source.mp4" label="input · 16:9">
-              {/* 9:16 crop window over the 16:9 source: window width = height x 9/16 = 31.64% of frame width */}
-              <div className="absolute inset-y-0 left-0 bg-black/50" style={{ width: '34.18%' }} />
-              <div className="absolute inset-y-0 right-0 bg-black/50" style={{ width: '34.18%' }} />
-              <div
-                className="absolute inset-y-0 left-1/2 -translate-x-1/2 border border-brass"
-                style={{ width: '31.64%' }}
-              >
-                <span className="absolute top-1.5 left-1/2 -translate-x-1/2 readout text-brass bg-black/70 rounded-full px-2 py-0.5 whitespace-nowrap">
-                  9:16
-                </span>
-              </div>
-            </DemoFigure>
+            <DemoFigure src="/demo/clip-source.mp4" label="input · 16:9" />
 
             <MoveRight size={20} className="text-brass hidden md:block" aria-hidden="true" />
             <ArrowDown size={20} className="text-brass md:hidden justify-self-center" aria-hidden="true" />
