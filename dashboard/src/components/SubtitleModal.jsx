@@ -75,7 +75,7 @@ const swatchClass = (selected) =>
         ? 'ring-2 ring-[color:var(--color-accent)] ring-offset-2 ring-offset-[color:var(--color-paper-2)]'
         : 'ring-1 ring-[color:var(--color-rule-2)] hover:ring-[color:var(--color-accent)]'}`;
 
-export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook }) {
+export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0 }) {
     const [position, setPosition] = useState('bottom');
     const [fontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
@@ -495,7 +495,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                             className="btn-primary flex-1"
                         >
                             {isProcessing && <Loader2 size={16} className="animate-spin text-brassink" />}
-                            {isProcessing ? 'generating...' : 'apply subtitles'}
+                            {isProcessing ? 'generating...' : (bulkCount > 1 ? `apply to ${bulkCount} clips` : 'apply subtitles')}
                         </button>
                     </div>
                 </div>

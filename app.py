@@ -7,6 +7,7 @@ import json
 import shutil
 import glob
 import time
+import zipfile
 import math
 import itertools
 import asyncio
@@ -16,7 +17,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 
@@ -807,6 +809,50 @@ async def get_status(job_id: str, request: Request):
         "logs": _visible_logs(job['logs']),
         "result": job.get('result')
     }
+
+
+@app.get("/api/jobs/{job_id}/download-all")
+async def download_all_clips(job_id: str, request: Request):
+    """Bundle the current version of every clip of a job into one ZIP."""
+    if job_id in jobs:
+        await _assert_job_owner(request, jobs[job_id])
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    with open(json_files[0], 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    files = []
+    for i, clip in enumerate(data.get('shorts', [])):
+        filename = os.path.basename(clip.get('video_url', '').split('/')[-1])
+        path = os.path.join(output_dir, filename)
+        if filename and os.path.exists(path):
+            files.append((i, path))
+
+    if not files:
+        raise HTTPException(status_code=404, detail="No clip files found for this job")
+
+    zip_path = os.path.join(output_dir, f"clips_{int(time.time())}.zip")
+
+    def build_zip():
+        # Videos are already compressed; store instead of deflate for speed.
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
+            for i, path in files:
+                zf.write(path, arcname=f"clip_{i + 1:02d}_{os.path.basename(path)}")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, build_zip)
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"openshorts_clips_{job_id[:8]}.zip",
+        background=BackgroundTask(os.remove, zip_path),
+    )
+
 
 from editor import VideoEditor
 from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video

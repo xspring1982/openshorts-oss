@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2 } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Type } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
+import SubtitleModal from './components/SubtitleModal';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
@@ -18,6 +19,7 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
+import { getApiUrl } from './config';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 
@@ -181,6 +183,10 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
+  // Bulk subtitles: apply one style to every clip of the job
+  const [showBulkSubtitles, setShowBulkSubtitles] = useState(false);
+  const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
+  const [downloadingAll, setDownloadingAll] = useState(false);
   const [logs, setLogs] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
@@ -206,6 +212,75 @@ function App() {
 
   const handleClipPause = () => {
     setIsSyncedPlaying(false);
+  };
+
+  // Apply one subtitle style to every clip of the job, sequentially.
+  const handleBulkSubtitles = async (options) => {
+    const clips = results?.clips || [];
+    const total = clips.length;
+    if (!total) return;
+    setBulkSub({ running: true, current: 0, total, errors: 0 });
+    let errors = 0;
+    for (let i = 0; i < total; i++) {
+      setBulkSub({ running: true, current: i + 1, total, errors });
+      try {
+        const res = await apiFetch('/api/subtitle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_id: jobId,
+            clip_index: i,
+            position: options.position,
+            font_size: options.fontSize,
+            font_name: options.fontName,
+            font_color: options.fontColor,
+            border_color: options.borderColor,
+            border_width: options.borderWidth,
+            bg_color: options.bgColor,
+            bg_opacity: options.bgOpacity,
+            style: options.style || 'classic',
+            highlight_color: options.highlightColor || '#FFD700',
+            effect: options.effect || 'none',
+            base_opacity: options.baseOpacity ?? 1.0,
+            uppercase: options.uppercase || false,
+            // Chain from the clip's current server file (its video_url basename).
+            input_filename: (clips[i].video_url || '').split('/').pop(),
+          }),
+        });
+        if (!res.ok) errors++;
+      } catch {
+        errors++;
+      }
+    }
+    setBulkSub({ running: false, current: total, total, errors });
+    setShowBulkSubtitles(false);
+    // Refresh results so each ResultCard picks up its new subtitled video_url.
+    try {
+      const data = await pollJob(jobId);
+      if (data.result) setResults(data.result);
+    } catch { /* keep current results */ }
+  };
+
+  const handleDownloadAll = async () => {
+    if (!jobId) return;
+    setDownloadingAll(true);
+    try {
+      const res = await apiFetch(`/api/jobs/${jobId}/download-all`);
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Download failed: ${e.message}`);
+    } finally {
+      setDownloadingAll(false);
+    }
   };
 
   // Session Recovery: Restore on mount
@@ -1135,14 +1210,40 @@ function App() {
                       GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
                     </span>
                   )}
-                  {results?.clips?.length > 1 && status === 'complete' && (
-                    <button
-                      onClick={() => setShowScheduleWeek(true)}
-                      className="btn-primary px-4 py-2 text-xs ml-auto"
-                    >
-                      <Calendar size={14} />
-                      schedule week
-                    </button>
+                  {results?.clips?.length > 0 && status === 'complete' && (
+                    <div className="flex items-center gap-2 ml-auto">
+                      {results.clips.length > 1 && (
+                        <button
+                          onClick={() => setShowBulkSubtitles(true)}
+                          disabled={bulkSub.running}
+                          className="btn-ghost px-3 py-2 text-xs"
+                          title="Apply one subtitle style to all clips"
+                        >
+                          {bulkSub.running
+                            ? <><Loader2 size={14} className="animate-spin" />subtitling {bulkSub.current}/{bulkSub.total}</>
+                            : <><Type size={14} />subtitle all</>}
+                        </button>
+                      )}
+                      <button
+                        onClick={handleDownloadAll}
+                        disabled={downloadingAll}
+                        className="btn-ghost px-3 py-2 text-xs"
+                        title="Download all clips as a ZIP"
+                      >
+                        {downloadingAll
+                          ? <><Loader2 size={14} className="animate-spin" />zipping…</>
+                          : <><Download size={14} />download all</>}
+                      </button>
+                      {results.clips.length > 1 && (
+                        <button
+                          onClick={() => setShowScheduleWeek(true)}
+                          className="btn-primary px-4 py-2 text-xs"
+                        >
+                          <Calendar size={14} />
+                          schedule week
+                        </button>
+                      )}
+                    </div>
                   )}
                 </h2>
 
@@ -1290,6 +1391,20 @@ function App() {
         uploadUserId={uploadUserId}
         isManaged={isManaged}
       />
+
+      {/* Bulk subtitles: preview on the first clip, apply the chosen style to all */}
+      {showBulkSubtitles && results?.clips?.length > 0 && (
+        <SubtitleModal
+          isOpen={showBulkSubtitles}
+          onClose={() => setShowBulkSubtitles(false)}
+          onGenerate={handleBulkSubtitles}
+          isProcessing={bulkSub.running}
+          videoUrl={getApiUrl(results.clips[0].video_url)}
+          jobId={jobId}
+          clipIndex={0}
+          bulkCount={results.clips.length}
+        />
+      )}
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       {showTopUp && (
