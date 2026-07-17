@@ -541,13 +541,25 @@ def _scrub_secrets(line: str) -> str:
     return _CREDENTIAL_URL_RE.sub(r'\1***:***@', line)
 
 
+# Cloud users don't need (and shouldn't see) the ingest plumbing: proxy usage,
+# the YouTube downloader internals, cookies, etc. These are dropped from the
+# client view even when the line is emoji-prefixed. Never applied under
+# DEBUG_LOGS (local dev sees everything).
+_SENSITIVE_LOG_RE = re.compile(
+    r'proxy|yt[-_ ]?dlp|youtube-?dl|cookie|residential|po[_ ]?token'
+    r'|player_client|extractor|\bdownload|descarg',
+    re.IGNORECASE,
+)
+
+
 def _visible_logs(logs):
     """Logs to surface to the client.
 
     Self-host (BILLING off) shows the full pipeline output so people running
     their own instance can debug. Cloud shows only the pipeline's own friendly
-    progress lines (emoji-prefixed, plus the worker's start/finish markers) and
-    hides the raw yt-dlp / ffmpeg / debug spew from paying users.
+    progress lines (emoji-prefixed, plus the worker's start/finish markers),
+    minus any ingest plumbing (proxy / downloader / cookies) — paying users
+    just want to see analysis and rendering progress.
 
     DEBUG_LOGS=true forces the full output even under billing — for local dev
     where you run in paid mode but still want the raw logs.
@@ -558,6 +570,8 @@ def _visible_logs(logs):
     for ln in logs:
         s = ln.lstrip()
         if not s:
+            continue
+        if _SENSITIVE_LOG_RE.search(ln):
             continue
         if s.startswith(("Job started", "Process finished")) or ord(s[0]) > 0x2000:
             visible.append(ln)
