@@ -16,6 +16,7 @@ import yt_dlp
 import mediapipe as mp
 # import whisper (replaced by faster_whisper inside function)
 from google import genai
+from google.genai import types as genai_types
 from dotenv import load_dotenv
 import json
 
@@ -835,11 +836,23 @@ def get_viral_clips(transcript_result, video_duration):
         # with exponential backoff before giving up (issue #27).
         max_attempts = 3
         response = None
+        # Force valid JSON output. Manual fence-stripping + json.loads breaks on
+        # models that emit trailing text or truncate (e.g. flash-lite), so let
+        # the API guarantee a JSON body. Fall back to a plain call if the SDK
+        # or model rejects the option.
+        try:
+            gen_config = genai_types.GenerateContentConfig(response_mime_type="application/json")
+        except Exception:
+            gen_config = None
         for attempt in range(1, max_attempts + 1):
             try:
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=prompt
+                    contents=prompt,
+                    config=gen_config,
+                ) if gen_config is not None else client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
                 )
                 break
             except Exception as e:
@@ -902,17 +915,28 @@ def get_viral_clips(transcript_result, video_duration):
         # ------------------------
 
         # Clean response if it contains markdown code blocks
-        text = response.text
+        text = (response.text or "").strip()
         if text.startswith("```json"):
             text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
-        
-        result_json = json.loads(text)
+
+        try:
+            result_json = json.loads(text)
+        except json.JSONDecodeError:
+            # Rescue: extract the outermost {...} object if the model wrapped
+            # the JSON in prose or appended stray tokens.
+            first, last = text.find('{'), text.rfind('}')
+            if first == -1 or last <= first:
+                raise
+            result_json = json.loads(text[first:last + 1])
+
         if cost_analysis:
             result_json['cost_analysis'] = cost_analysis
-            
+
         return result_json
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
