@@ -75,7 +75,7 @@ const swatchClass = (selected) =>
         ? 'ring-2 ring-[color:var(--color-accent)] ring-offset-2 ring-offset-[color:var(--color-paper-2)]'
         : 'ring-1 ring-[color:var(--color-rule-2)] hover:ring-[color:var(--color-accent)]'}`;
 
-export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0 }) {
+export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
     const [position, setPosition] = useState('bottom');
     const [fontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
@@ -479,24 +479,45 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                         </div>
                     </div>
 
-                    <div className="flex gap-2 mt-5 shrink-0">
-                        <button onClick={onClose} className="btn-ghost">
-                            cancel
-                        </button>
-                        <button
-                            onClick={() => onGenerate({
+                    <div className="mt-5 shrink-0 space-y-2">
+                        {(() => {
+                            const styleOptions = {
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
                                 style, effect, baseOpacity, uppercase, highlightColor,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
-                            })}
-                            disabled={isProcessing}
-                            className="btn-primary flex-1"
-                        >
-                            {isProcessing && <Loader2 size={16} className="animate-spin text-brassink" />}
-                            {isProcessing ? 'generating...' : (bulkCount > 1 ? `apply to ${bulkCount} clips` : 'apply subtitles')}
-                        </button>
+                            };
+                            const bulkRunning = bulkProgress?.running;
+                            return (
+                                <>
+                                    <div className="flex gap-2">
+                                        <button onClick={onClose} className="btn-ghost">
+                                            cancel
+                                        </button>
+                                        <button
+                                            onClick={() => onGenerate(styleOptions)}
+                                            disabled={isProcessing}
+                                            className="btn-primary flex-1"
+                                        >
+                                            {(isProcessing && !bulkRunning) && <Loader2 size={16} className="animate-spin text-brassink" />}
+                                            {(isProcessing && !bulkRunning) ? 'generating...' : 'apply to this clip'}
+                                        </button>
+                                    </div>
+                                    {onApplyAll && bulkCount > 1 && (
+                                        <button
+                                            onClick={() => onApplyAll(styleOptions)}
+                                            disabled={isProcessing}
+                                            className="btn-ghost w-full flex items-center justify-center gap-2"
+                                        >
+                                            {bulkRunning
+                                                ? <><Loader2 size={16} className="animate-spin" />applying to all… {bulkProgress.current}/{bulkProgress.total}</>
+                                                : `apply this style to all ${bulkCount} clips`}
+                                        </button>
+                                    )}
+                                </>
+                            );
+                        })()}
                     </div>
                 </div>
             </div>

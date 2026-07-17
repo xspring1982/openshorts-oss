@@ -23,7 +23,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -747,7 +747,13 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                 isOpen={showSubtitleModal}
                 onClose={() => setShowSubtitleModal(false)}
                 onGenerate={handleSubtitle}
-                isProcessing={isSubtitling}
+                onApplyAll={onBulkSubtitle ? async (options) => {
+                    await onBulkSubtitle(options);
+                    setShowSubtitleModal(false);
+                } : undefined}
+                bulkCount={clipCount}
+                bulkProgress={bulkProgress}
+                isProcessing={isSubtitling || (bulkProgress?.running ?? false)}
                 videoUrl={originalVideoUrl}
                 jobId={jobId}
                 clipIndex={index}

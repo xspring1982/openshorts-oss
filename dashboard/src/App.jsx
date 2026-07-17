@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Type } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
-import SubtitleModal from './components/SubtitleModal';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
@@ -19,7 +18,6 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
-import { getApiUrl } from './config';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 
@@ -183,8 +181,8 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
-  // Bulk subtitles: apply one style to every clip of the job
-  const [showBulkSubtitles, setShowBulkSubtitles] = useState(false);
+  // Bulk subtitles: apply one style to every clip of the job (triggered from
+  // within a clip's subtitle modal via "apply to all").
   const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -253,7 +251,6 @@ function App() {
       }
     }
     setBulkSub({ running: false, current: total, total, errors });
-    setShowBulkSubtitles(false);
     // Refresh results so each ResultCard picks up its new subtitled video_url.
     try {
       const data = await pollJob(jobId);
@@ -1212,18 +1209,6 @@ function App() {
                   )}
                   {results?.clips?.length > 0 && status === 'complete' && (
                     <div className="flex items-center gap-2 ml-auto">
-                      {results.clips.length > 1 && (
-                        <button
-                          onClick={() => setShowBulkSubtitles(true)}
-                          disabled={bulkSub.running}
-                          className="btn-ghost px-3 py-2 text-xs"
-                          title="Apply one subtitle style to all clips"
-                        >
-                          {bulkSub.running
-                            ? <><Loader2 size={14} className="animate-spin" />subtitling {bulkSub.current}/{bulkSub.total}</>
-                            : <><Type size={14} />subtitle all</>}
-                        </button>
-                      )}
                       <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
@@ -1264,6 +1249,9 @@ function App() {
                           isManaged={isManaged}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
+                          onBulkSubtitle={handleBulkSubtitles}
+                          clipCount={results.clips.length}
+                          bulkProgress={bulkSub}
                         />
                       ))}
                     </div>
@@ -1392,19 +1380,6 @@ function App() {
         isManaged={isManaged}
       />
 
-      {/* Bulk subtitles: preview on the first clip, apply the chosen style to all */}
-      {showBulkSubtitles && results?.clips?.length > 0 && (
-        <SubtitleModal
-          isOpen={showBulkSubtitles}
-          onClose={() => setShowBulkSubtitles(false)}
-          onGenerate={handleBulkSubtitles}
-          isProcessing={bulkSub.running}
-          videoUrl={getApiUrl(results.clips[0].video_url)}
-          jobId={jobId}
-          clipIndex={0}
-          bulkCount={results.clips.length}
-        />
-      )}
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       {showTopUp && (
