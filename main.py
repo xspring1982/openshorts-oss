@@ -282,12 +282,37 @@ class SpeakerTracker:
             
         return None
 
+# Detectors never need full-resolution frames: MediaPipe returns relative
+# coords and YOLO boxes are scaled back up. Running them on a ≤640px copy cuts
+# per-frame preprocessing cost hard, which is what dominates CPU-only renders.
+DETECT_MAX_WIDTH = 640
+# Detect every Nth frame; SmoothedCameraman interpolates between updates.
+DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
+# YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
+YOLO_FALLBACK_STRIDE = DETECT_STRIDE * 2
+
+
+def _detection_frame(frame):
+    """Downscaled copy for detectors. Returns (small_frame, scale) with
+    scale mapping small-frame pixel coords back to the original frame."""
+    h, w = frame.shape[:2]
+    if w <= DETECT_MAX_WIDTH:
+        return frame, 1.0
+    scale = w / DETECT_MAX_WIDTH
+    small = cv2.resize(frame, (DETECT_MAX_WIDTH, max(int(h / scale), 2)),
+                       interpolation=cv2.INTER_AREA)
+    return small, scale
+
+
 def detect_face_candidates(frame):
     """
     Returns list of all detected faces using lightweight FaceDetection.
+    Boxes are in ORIGINAL frame coordinates (detection runs downscaled;
+    MediaPipe's relative coords make the mapping exact).
     """
     height, width, _ = frame.shape
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    small, _scale = _detection_frame(frame)
+    rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
     results = face_detection.process(rgb_frame)
     
     candidates = []
@@ -312,21 +337,23 @@ def detect_face_candidates(frame):
 def detect_person_yolo(frame):
     """
     Fallback: Detect largest person using YOLO when face detection fails.
-    Returns [x, y, w, h] of the person's 'upper body' approximation.
+    Returns [x, y, w, h] of the person's 'upper body' approximation, in
+    ORIGINAL frame coordinates (inference runs on a downscaled copy).
     """
+    small, scale = _detection_frame(frame)
     # Use the globally loaded model
-    results = model(frame, verbose=False, classes=[0]) # class 0 is person
-    
+    results = model(small, verbose=False, classes=[0]) # class 0 is person
+
     if not results:
         return None
-        
+
     best_box = None
     max_area = 0
-    
+
     for result in results:
         boxes = result.boxes
         for box in boxes:
-            x1, y1, x2, y2 = [int(i) for i in box.xyxy[0]]
+            x1, y1, x2, y2 = [int(i * scale) for i in box.xyxy[0]]
             w = x2 - x1
             h = y2 - y1
             area = w * h
@@ -352,22 +379,28 @@ def create_general_frame(frame, output_width, output_height):
     # Crop center to aspect ratio
     bg_scale = output_height / orig_h
     bg_w = int(orig_w * bg_scale)
-    bg_resized = cv2.resize(frame, (bg_w, output_height), interpolation=cv2.INTER_LANCZOS4)
-    
+    bg_resized = cv2.resize(frame, (bg_w, output_height), interpolation=cv2.INTER_LINEAR)
+
     # Crop center of background
     start_x = (bg_w - output_width) // 2
     if start_x < 0: start_x = 0
     background = bg_resized[:, start_x:start_x+output_width]
     if background.shape[1] != output_width:
-        background = cv2.resize(background, (output_width, output_height), interpolation=cv2.INTER_LANCZOS4)
-        
-    # Blur background
-    background = cv2.GaussianBlur(background, (51, 51), 0)
-    
+        background = cv2.resize(background, (output_width, output_height), interpolation=cv2.INTER_LINEAR)
+
+    # Blur background: blur at quarter resolution and scale back up — visually
+    # identical for a defocused backdrop, an order of magnitude cheaper than a
+    # 51px Gaussian at full size.
+    small_bg = cv2.resize(background, (max(output_width // 4, 2), max(output_height // 4, 2)),
+                          interpolation=cv2.INTER_AREA)
+    small_bg = cv2.GaussianBlur(small_bg, (13, 13), 0)
+    background = cv2.resize(small_bg, (output_width, output_height),
+                            interpolation=cv2.INTER_LINEAR)
+
     # 2. Foreground (Fit Width)
     scale = output_width / orig_w
     fg_h = int(orig_h * scale)
-    foreground = cv2.resize(frame, (output_width, fg_h), interpolation=cv2.INTER_LANCZOS4)
+    foreground = cv2.resize(frame, (output_width, fg_h), interpolation=cv2.INTER_LINEAR)
     
     # 3. Overlay
     y_offset = (output_height - fg_h) // 2
@@ -694,6 +727,10 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     # Global tracker for single-person shots
     speaker_tracker = SpeakerTracker(cooldown_frames=30)
 
+    # Per-stage wall time (server-side diagnostics; hidden from cloud logs).
+    stage_seconds = {'detect': 0.0, 'write': 0.0}
+    loop_started = time.time()
+
     with tqdm(total=total_frames, desc="   Processing", file=sys.stdout) as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -720,34 +757,46 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
                 
             else:
                 # "Single Speaker" -> Track & Crop
-                
-                # Detect every 2nd frame for performance
-                if frame_number % 2 == 0:
+
+                # Detect every Nth frame for performance (cameraman smooths in
+                # between); the much heavier YOLO fallback gets its own stride.
+                if frame_number % DETECT_STRIDE == 0:
+                    t_det = time.time()
                     candidates = detect_face_candidates(frame)
                     target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
                     if target_box:
                         cameraman.update_target(target_box)
-                    else:
+                    elif frame_number % YOLO_FALLBACK_STRIDE == 0:
                         person_box = detect_person_yolo(frame)
                         if person_box:
                             cameraman.update_target(person_box)
+                    stage_seconds['detect'] += time.time() - t_det
 
                 # Snap camera on scene change to avoid panning from previous scene position
                 is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
-                
+
                 x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
-                
+
                 # Crop
                 if y2 > y1 and x2 > x1:
                     cropped = frame[y1:y2, x1:x2]
-                    output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LANCZOS4)
+                    output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
                 else:
-                    output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LANCZOS4)
+                    output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
+            t_wr = time.time()
             ffmpeg_process.stdin.write(output_frame.tobytes())
+            stage_seconds['write'] += time.time() - t_wr
             frame_number += 1
             pbar.update(1)
     
+    loop_total = time.time() - loop_started
+    other = loop_total - stage_seconds['detect'] - stage_seconds['write']
+    print(f"\n   ⏱️ Frame loop: {loop_total:.1f}s total — "
+          f"detect {stage_seconds['detect']:.1f}s, "
+          f"encode-wait {stage_seconds['write']:.1f}s, "
+          f"decode+render {other:.1f}s ({frame_number} frames)")
+
     ffmpeg_process.stdin.close()
     stderr_output = ffmpeg_process.stderr.read().decode()
     ffmpeg_process.wait()
