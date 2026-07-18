@@ -657,6 +657,19 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     """
     script_start_time = time.time()
 
+    # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
+    # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
+    if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
+        try:
+            import reframe_v2
+            t0 = time.time()
+            result = reframe_v2.render(input_video, final_output_video, aspect_ratio)
+            print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
+            return result
+        except Exception as e:
+            print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
+                  f"falling back to v1 frame loop")
+
     # Define temporary file paths based on the output name
     base_name = os.path.splitext(final_output_video)[0]
     temp_video_output = f"{base_name}_temp_video.mp4"
