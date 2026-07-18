@@ -122,6 +122,9 @@ def run_whisper_transcription(media_path, **params):
         for segment in segments:
             materialized.append(segment)
             progress.update(segment.end)
+        # VAD trims trailing silence, so the last segment can end short of the
+        # media duration — force the 100% line.
+        progress.update(progress.total)
         return materialized, info
 
 
@@ -233,6 +236,7 @@ def _transcribe_with_parakeet(media_path):
             for seg in model.recognize(wav_path):
                 results.append(seg)
                 progress.update(float(seg.end))
+            progress.update(progress.total)
     finally:
         try:
             os.remove(wav_path)
