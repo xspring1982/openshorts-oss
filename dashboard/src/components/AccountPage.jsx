@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2, CreditCard, LogOut, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
+import { track } from '../lib/analytics';
 
 const fmt1 = (n) => Math.round((n || 0) * 10) / 10;
 
@@ -24,6 +25,26 @@ export default function AccountPage() {
       if ((data && data.plan) || tries > 15) {
         clearInterval(t);
         setActivating(false);
+        // Fire the Subscribed conversion goal. A pending-checkout stash (set in
+        // PricingSection) carries the plan price, so we can attach real revenue;
+        // top-ups don't set it, so they never count as a subscription.
+        if (data && data.plan) {
+          let pending = null;
+          try { pending = JSON.parse(localStorage.getItem('os_pending_checkout') || 'null'); } catch (_) { /* ignore */ }
+          if (pending) {
+            // This Plausible is Community Edition, which has no revenue goals —
+            // so the price rides along as plain props (value_usd / plan) that CE
+            // can break the goal down by. The exact MRR still lives in Stripe.
+            track('Subscribed', {
+              props: {
+                plan: pending.plan,
+                interval: pending.interval,
+                value_usd: Math.round((pending.amount || 0) / 100),
+              },
+            });
+            try { localStorage.removeItem('os_pending_checkout'); } catch (_) { /* ignore */ }
+          }
+        }
         // First time a plan activates, take the user straight to connect their
         // socials. Guard with a flag so top-up checkouts don't re-trigger it.
         if (data && data.plan && !localStorage.getItem('os_socials_prompted')) {

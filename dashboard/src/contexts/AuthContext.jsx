@@ -7,6 +7,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getApiUrl } from '../config';
 import { apiFetch, apiJson, getToken, setToken, clearToken } from '../lib/api';
+import { track } from '../lib/analytics';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -65,6 +66,9 @@ export function AuthProvider({ children }) {
         }
       }
       const signedInMe = await refreshMe();
+      // This handler only runs on the auth redirect, so a resolved user here is
+      // a fresh sign-in / sign-up — the top of the conversion funnel.
+      if (signedInMe?.user) track('Signup', { props: { method: kind === 'verify' ? 'magic_link' : 'google' } });
       // New sign-ups (and anyone without an active plan/trial) go straight to
       // pricing so they can start their free trial; entitled users land in the app.
       if (signedInMe?.user && !signedInMe?.entitled) destination = '#/pricing';
