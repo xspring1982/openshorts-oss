@@ -1144,10 +1144,12 @@ PROXY_ALERT_GB = 100
 def _job_source_url(job) -> Optional[str]:
     """The ``-u`` argument of the job's main.py command, if it was a URL job."""
     cmd = list((job or {}).get('cmd') or [])
-    for flag in ('-u', '--url'):
-        if flag in cmd:
-            i = cmd.index(flag)
-            return cmd[i + 1] if i + 1 < len(cmd) else None
+    # The command is ``python -u main.py -u <url>``: skip past the script
+    # name first or the interpreter's own ``-u`` flag is what gets matched.
+    start = next((i + 1 for i, a in enumerate(cmd) if str(a).endswith('main.py')), 0)
+    for i in range(start, len(cmd) - 1):
+        if cmd[i] in ('-u', '--url'):
+            return cmd[i + 1]
     return None
 
 

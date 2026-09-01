@@ -176,3 +176,10 @@ def test_alert_folds_a_burst_into_one_message(monkeypatch):
 def test_host_of_strips_credentials_and_paths():
     assert proxy_ledger.host_of("https://user:pw@www.youtube.com/watch?v=1") == "www.youtube.com"
     assert proxy_ledger.host_of(None) is None
+
+
+def test_job_source_url_skips_the_interpreter_flag():
+    app = pytest.importorskip("app")
+    job = {"cmd": ["/usr/bin/python3", "-u", "main.py", "-u", "https://www.youtube.com/watch?v=x", "-o", "out"]}
+    assert app._job_source_url(job) == "https://www.youtube.com/watch?v=x"
+    assert app._job_source_url({"cmd": ["/usr/bin/python3", "-u", "main.py", "-i", "file.mp4"]}) is None
