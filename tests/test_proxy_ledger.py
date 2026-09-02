@@ -18,6 +18,9 @@ from cloud import metering, proxy_ledger
 class TestStaticFailureWarrantsPaid:
     def test_ip_specific_failures_do(self):
         for err in ("ERROR: Sign in to confirm you're not a bot",
+                    # fake on Decodo IPs: 5 videos "unavailable" on all three
+                    # statics downloaded fine through the paid proxy (1-sep)
+                    "ERROR: [youtube] BJW5gAgk4bg: Video unavailable",
                     "HTTP Error 403: Forbidden", "HTTP Error 429: Too Many Requests",
                     "ProxyError: Tunnel connection failed: 407",
                     "Unable to download webpage: The read operation timed out",
@@ -26,7 +29,7 @@ class TestStaticFailureWarrantsPaid:
 
     def test_content_failures_do_not(self):
         for err in ("ERROR: Private video. Sign in if you've been granted access",
-                    "ERROR: Video unavailable", "This video has been removed by the uploader",
+                    "This video has been removed by the uploader",
                     "Join this channel to get access to members-only content",
                     "no duration in metadata", "Premieres in 3 hours",
                     "Unsupported URL: https://shopee.vn/product", "Sign in to confirm your age"):
