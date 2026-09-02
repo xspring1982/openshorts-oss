@@ -186,3 +186,103 @@ def test_job_source_url_skips_the_interpreter_flag():
     job = {"cmd": ["/usr/bin/python3", "-u", "main.py", "-u", "https://www.youtube.com/watch?v=x", "-o", "out"]}
     assert app._job_source_url(job) == "https://www.youtube.com/watch?v=x"
     assert app._job_source_url({"cmd": ["/usr/bin/python3", "-u", "main.py", "-i", "file.mp4"]}) is None
+
+
+# --- daily budget ----------------------------------------------------------
+
+class TestDailyBudget:
+    def _prime(self, monkeypatch, used_mb, budget_mb=500):
+        async def fake_today():
+            return int(used_mb * 1e6)
+        monkeypatch.setattr(proxy_ledger, "paid_bytes_today", fake_today)
+        monkeypatch.setattr(proxy_ledger, "DAILY_BUDGET_MB", budget_mb)
+        proxy_ledger._budget_alerted["day"] = None
+
+    def test_under_budget_allows_paid(self, monkeypatch):
+        self._prime(monkeypatch, used_mb=100)
+        assert asyncio.run(proxy_ledger.budget_exceeded()) is False
+
+    def test_over_budget_blocks_and_alerts_once_per_day(self, monkeypatch):
+        self._prime(monkeypatch, used_mb=600)
+        sent = []
+
+        async def fake_send(text):
+            sent.append(text)
+        import cloud.alerts as alerts
+        monkeypatch.setattr(alerts, "send_telegram", fake_send)
+        assert asyncio.run(proxy_ledger.budget_exceeded()) is True
+        assert asyncio.run(proxy_ledger.budget_exceeded()) is True
+        assert len(sent) == 1 and "budget" in sent[0].lower()
+
+    def test_zero_disables_the_cap(self, monkeypatch):
+        self._prime(monkeypatch, used_mb=99999, budget_mb=0)
+        assert asyncio.run(proxy_ledger.budget_exceeded()) is False
+
+
+def test_probe_allow_paid_false_never_uses_the_paid_proxy(monkeypatch):
+    monkeypatch.setenv("PROXY_URL", "http://paid")
+    monkeypatch.setenv("STATIC_PROXY_URLS", "http://s1")
+    monkeypatch.delenv("DIRECT_FIRST", raising=False)
+    monkeypatch.setenv("BGUTIL_SCRIPT_PATH", "")
+    monkeypatch.setenv("BGUTIL_BASE_URL", "")
+    seen = []
+
+    class _FakeYDL:
+        def __init__(self, opts): seen.append(opts.get("proxy"))
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False):
+            raise RuntimeError("Sign in to confirm you're not a bot")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    monkeypatch.setattr(metering, "_ffprobe_url_seconds", lambda url, timeout=30: 0.0)
+    with pytest.raises(ValueError):
+        metering.probe_url_minutes("https://www.youtube.com/watch?v=x", allow_paid=False)
+    assert "http://paid" not in seen
+
+
+# --- the watcher's static probe --------------------------------------------
+
+class TestStaticProbeAgainstYouTube:
+    """google.com answered 204 through statics YouTube was refusing (28-aug):
+    the static probe now has to see a playable watch page."""
+
+    def _client(self, monkeypatch, status=200, body="", raise_exc=None):
+        import cloud.alerts as alerts
+        calls = {}
+
+        class _Resp:
+            status_code = status
+            text = body
+
+        class _Client:
+            def __init__(self, **kw): calls["proxy"] = kw.get("proxy")
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, **kw):
+                calls["url"] = url
+                if raise_exc:
+                    raise raise_exc
+                return _Resp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        return alerts, calls
+
+    def test_static_needs_the_playable_markers(self, monkeypatch):
+        monkeypatch.setenv("PROXY_URL", "http://paid")
+        alerts, calls = self._client(monkeypatch, body='{"playabilityStatus":{"status":"OK"}}')
+        ok, _ = asyncio.run(alerts._probe_one("http://static1"))
+        assert ok and "youtube.com/watch" in calls["url"]
+
+    def test_static_answering_without_player_is_a_miss(self, monkeypatch):
+        monkeypatch.setenv("PROXY_URL", "http://paid")
+        alerts, _ = self._client(monkeypatch, body="<html>consent page</html>")
+        ok, detail = asyncio.run(alerts._probe_one("http://static1"))
+        assert not ok and "flagged" in detail
+
+    def test_paid_probe_keeps_the_cheap_http_204(self, monkeypatch):
+        monkeypatch.setenv("PROXY_URL", "http://paid")
+        alerts, calls = self._client(monkeypatch, status=204, body="")
+        ok, _ = asyncio.run(alerts._probe_one("http://paid"))
+        assert ok and calls["url"].startswith("http://www.google.com")

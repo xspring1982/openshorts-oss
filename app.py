@@ -297,11 +297,20 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     # job cap.
     _check_probe_rate(user.id)
 
-    # Probe input duration (blocking → run in a thread).
+    # Probe input duration (blocking → run in a thread). When today's paid
+    # traffic is over budget, the probe (and below, the job itself) runs
+    # without the per-GB proxy: statics or nothing.
+    try:
+        from cloud import proxy_ledger as _pl
+        paid_allowed = not await _pl.budget_exceeded()
+    except Exception:
+        pass
     loop = asyncio.get_event_loop()
     try:
         if url:
-            minutes = await loop.run_in_executor(None, _metering.probe_url_minutes, url)
+            minutes = await loop.run_in_executor(
+                None, functools.partial(_metering.probe_url_minutes, url,
+                                        allow_paid=paid_allowed))
         else:
             minutes = await loop.run_in_executor(None, _metering.probe_file_minutes, input_path)
     except Exception:
@@ -896,6 +905,12 @@ def _resume_interrupted_jobs() -> set:
         # Rebuild env from scratch — the manifest holds no secrets. Managed
         # (cloud) jobs get the server key; self-host falls back to its env key.
         env = os.environ.copy()
+        try:
+            from cloud import proxy_ledger as _pl
+            if BILLING_ENABLED and _pl.budget_exceeded_sync():
+                env.pop("PROXY_URL", None)  # daily paid-proxy budget hit
+        except Exception:
+            pass
         if BILLING_ENABLED and user_id is not None:
             try:
                 env["GEMINI_API_KEY"] = managed_keys.gemini_key()
@@ -2169,6 +2184,9 @@ async def process_endpoint(
         raise gemini_missing_error()
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
+    # May be lowered by the paid-proxy budget check in the metering block
+    # below; self-host never runs that block, so it must default here.
+    paid_allowed = True
     force_low = str(force_low_quality).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
@@ -2289,6 +2307,9 @@ async def process_endpoint(
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
+    if not paid_allowed:
+        # Daily paid-proxy budget hit: this job runs on the free routes only.
+        env.pop("PROXY_URL", None)
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
     else:

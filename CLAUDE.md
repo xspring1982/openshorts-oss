@@ -349,7 +349,12 @@ paid ones, each free attempt's error); `app.py` persists it as a
 `proxy_usage` row at job end and pages Telegram when the paid proxy carried
 bytes, folding a burst into one message per 5 min. The in-memory monthly
 counter and the container log (rotates within the hour) cannot answer "what
-cost $14 on the 28th"; the table can. On the dev Mac, do not keep
+cost $14 on the 28th"; the table can. `PAID_PROXY_DAILY_MB` (default
+500) is the hard ceiling: past it the paid proxy is dropped from the probe
+and from every new job's env until UTC midnight. The watcher probes the
+static pool against a real YouTube watch page (playable markers), not
+google.com — the 28th happened because YouTube refused the static IPs while
+google kept answering 204. On the dev Mac, do not keep
 `PROXY_URL` in `.env`: every local `main.py` run then bills DataImpulse.
 
 ### Deploys and running jobs (handover + drain)
