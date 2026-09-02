@@ -8,9 +8,15 @@ import asyncio
 import json
 
 import pytest
-import yt_dlp
 
 from cloud import metering, proxy_ledger
+
+
+def _patch_ydl(monkeypatch, cls):
+    """Route yt-dlp construction through a stub; skips where the CI's minimal
+    env has no yt_dlp (cv2/torch-style: the module itself is the heavy dep)."""
+    yt_dlp = pytest.importorskip("yt_dlp")
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", cls)
 
 
 # --- probe policy ----------------------------------------------------------
@@ -64,7 +70,7 @@ def test_probe_never_reaches_paid_for_non_youtube(monkeypatch):
         def __exit__(self, *a): return False
         def extract_info(self, url, download=False): raise RuntimeError("HTTP Error 403: Forbidden")
 
-    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    _patch_ydl(monkeypatch, _FakeYDL)
     monkeypatch.setattr(metering, "_ffprobe_url_seconds", lambda url, timeout=30: 0.0)
     with pytest.raises(ValueError):
         metering.probe_url_minutes("https://www.twitch.tv/videos/123")
@@ -91,7 +97,7 @@ def test_probe_reaches_paid_only_for_ip_specific_failures(monkeypatch):
                     return {"duration": 600}
                 raise RuntimeError(static_error)
 
-        monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+        _patch_ydl(monkeypatch, _FakeYDL)
         monkeypatch.setattr(metering, "_ffprobe_url_seconds", lambda url, timeout=30: 0.0)
         metering.pop_paid_probe_events()
         try:
@@ -234,7 +240,7 @@ def test_probe_allow_paid_false_never_uses_the_paid_proxy(monkeypatch):
         def extract_info(self, url, download=False):
             raise RuntimeError("Sign in to confirm you're not a bot")
 
-    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    _patch_ydl(monkeypatch, _FakeYDL)
     monkeypatch.setattr(metering, "_ffprobe_url_seconds", lambda url, timeout=30: 0.0)
     with pytest.raises(ValueError):
         metering.probe_url_minutes("https://www.youtube.com/watch?v=x", allow_paid=False)
