@@ -7,7 +7,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getApiUrl } from '../config';
 import { apiFetch, apiJson, getToken, setToken, clearToken } from '../lib/api';
-import { track } from '../lib/analytics';
+import { track, identify, reset as resetAnalytics } from '../lib/analytics';
 import { report as reportAttribution } from '../lib/attribution';
 
 const AuthContext = createContext(null);
@@ -25,6 +25,8 @@ export function AuthProvider({ children }) {
     try {
       const data = await apiJson('/api/me');
       setMe(data);
+      // Same profileId (user uuid) the server-side events use.
+      identify(data?.user, { plan: data?.plan || 'free' });
       return data;
     } catch (e) {
       // Stale/invalid token: drop it and fall back to anonymous BYOK.
@@ -131,6 +133,7 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     clearToken();
     setMe(null);
+    resetAnalytics();
   }, []);
 
   const value = {

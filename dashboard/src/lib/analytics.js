@@ -35,3 +35,32 @@ export function track(event, options) {
     /* analytics must never throw into the app */
   }
 }
+
+/**
+ * Bind this browser to the signed-in account. `profileId` is the user's uuid —
+ * the same id the backend uses for its server-side events (ClipsDelivered,
+ * JobFailed and the `revenue` mirror of the Stripe webhook) — so a sale lands
+ * on the profile that carries the first visit's referrer and campaign.
+ * OpenPanel keeps the profile in memory only, so this runs on every boot.
+ */
+export function identify(user, props) {
+  try {
+    if (!user || !user.id) return;
+    if (typeof window !== 'undefined' && typeof window.op === 'function') {
+      window.op('identify', { profileId: String(user.id), email: user.email, ...(props || {}) });
+    }
+  } catch (_) {
+    /* analytics must never throw into the app */
+  }
+}
+
+/** Forget the current profile (sign-out). */
+export function reset() {
+  try {
+    if (typeof window !== 'undefined' && typeof window.op === 'function') {
+      window.op('clear');
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
