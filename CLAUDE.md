@@ -346,7 +346,12 @@ errors), never for a private/removed/members-only video or a live stream
 with no duration (those failed the same on every IP and used to cost ~1.7 MB
 × 2 extractors each), and **never for a non-YouTube URL** (the download
 plan already excluded those; Twitch, Kick, Rumble and product pages were
-reaching it through the probe). `main.py` prints `PROXY_ROUTE=<json>` after
+reaching it through the probe). The probe also carries `YOUTUBE_COOKIES`,
+like the download does: an anonymous probe from the static IPs gets "Sign in
+to confirm you're not a bot" in bursts (4-sep-2026: ~10 probes in one hour,
+1.8 MB each on the per-GB proxy) because a datacenter IP's anonymous rate
+limit is low and we make ~400 YouTube hits a day from three of them, while
+the authenticated download sails through the same IPs. `main.py` prints `PROXY_ROUTE=<json>` after
 every download (winner, paid bytes across all attempts including failed
 paid ones, each free attempt's error); `app.py` persists it as a
 `proxy_usage` row at job end and pages Telegram when the paid proxy carried

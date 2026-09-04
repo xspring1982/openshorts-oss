@@ -6,6 +6,7 @@ counter, hourly log rotation). These pin the two leaks found and the ledger.
 """
 import asyncio
 import json
+import os
 
 import pytest
 
@@ -292,3 +293,51 @@ class TestStaticProbeAgainstYouTube:
         alerts, calls = self._client(monkeypatch, status=204, body="")
         ok, _ = asyncio.run(alerts._probe_one("http://paid"))
         assert ok and calls["url"].startswith("http://www.google.com")
+
+
+def test_probe_uses_the_download_cookies(monkeypatch, tmp_path):
+    """An anonymous probe gets "Sign in to confirm you're not a bot" from the
+    static IPs (4-sep-2026: ~10 probes/day, 1.8 MB each on the per-GB proxy)
+    while the cookie-authenticated download passes on those same IPs."""
+    monkeypatch.setenv("YOUTUBE_COOKIES", "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n")
+    monkeypatch.setenv("STATIC_PROXY_URLS", "http://s1")
+    monkeypatch.delenv("PROXY_URL", raising=False)
+    monkeypatch.delenv("DIRECT_FIRST", raising=False)
+    monkeypatch.setenv("BGUTIL_SCRIPT_PATH", "")
+    monkeypatch.setenv("BGUTIL_BASE_URL", "")
+    seen = {}
+
+    class _FakeYDL:
+        def __init__(self, opts):
+            seen["cookiefile"] = opts.get("cookiefile")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False):
+            # The cookie file must exist while the extraction runs.
+            assert seen["cookiefile"] and os.path.exists(seen["cookiefile"])
+            with open(seen["cookiefile"]) as f:
+                seen["body"] = f.read()
+            return {"duration": 300}
+
+    _patch_ydl(monkeypatch, _FakeYDL)
+    assert metering.probe_url_minutes("https://www.youtube.com/watch?v=x") == 5.0
+    assert "SID" in seen["body"]
+    # and it is cleaned up afterwards
+    assert not os.path.exists(seen["cookiefile"])
+
+
+def test_probe_without_cookies_configured_still_works(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+    monkeypatch.delenv("STATIC_PROXY_URLS", raising=False)
+    monkeypatch.delenv("PROXY_URL", raising=False)
+    monkeypatch.setenv("BGUTIL_SCRIPT_PATH", "")
+    monkeypatch.setenv("BGUTIL_BASE_URL", "")
+
+    class _FakeYDL:
+        def __init__(self, opts): assert "cookiefile" not in opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False): return {"duration": 120}
+
+    _patch_ydl(monkeypatch, _FakeYDL)
+    assert metering.probe_url_minutes("https://www.youtube.com/watch?v=x") == 2.0
