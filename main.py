@@ -707,6 +707,15 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True):
     if have_hd:
         for i, s in enumerate(statics):
             plan.append((f'HD-static{i + 1}', False, s))
+    if statics and paid:
+        # The conservative clients (tv_embed/android) through a FREE static,
+        # before any per-GB attempt: YouTube serves a fake "Video unavailable"
+        # to the web/HD client from datacenter-ISP ranges on some videos while
+        # the fallback clients pass on the very same IPs (verified 4-sep-2026,
+        # all three statics, three countries). Costs nothing and the paid path
+        # was capped to 720p anyway, so there is no quality trade.
+        plan.append(('fallback-static', False, statics[0]))
+    if have_hd:
         plan.append(('HD', bool(paid), paid))
     plan.append(('fallback', bool(paid),
                  paid if paid else (statics[0] if statics else None)))
@@ -863,8 +872,8 @@ def download_youtube_video(url, output_dir="."):
 
     attempts = [
         (label,
-         fallback_args if label == 'fallback' else hd_args,
-         fallback_fmt if label == 'fallback' else _hd_fmt_for(capped),
+         fallback_args if label.startswith('fallback') else hd_args,
+         fallback_fmt if label.startswith('fallback') else _hd_fmt_for(capped),
          proxy)
         for label, capped, proxy in plan_download_attempts(
             _direct_first, _statics, _proxy, bool(hd_args), youtube=is_youtube_url(url))

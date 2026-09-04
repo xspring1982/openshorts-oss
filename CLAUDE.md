@@ -336,7 +336,10 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 
 Downloads go direct → static ISP proxies (flat rate) → DataImpulse (per GB),
 and the duration probe (`cloud/metering.probe_url_minutes`) follows the same
-order. Two rules keep the per-GB proxy at zero on a normal day: the probe
+order, with one extra free step before any per-GB attempt: the conservative
+clients (tv_embed/android) through a static (`fallback-static`), because
+YouTube serves the HD/web client a fake "Video unavailable" from
+datacenter-ISP IPs on some videos while those clients pass on the same IPs. Two rules keep the per-GB proxy at zero on a normal day: the probe
 reaches it **only** when a static route failed for a reason another IP can
 fix (`static_failure_warrants_paid`: bot-check, 403/429, proxy/network
 errors), never for a private/removed/members-only video or a live stream
