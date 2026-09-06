@@ -1677,8 +1677,14 @@ app.add_middleware(
     expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
 )
 
-# Mount static files for serving videos
-app.mount("/videos", StaticFiles(directory=OUTPUT_DIR), name="videos")
+# Mount static files for serving videos. A miss under /videos/<job_id>/ first
+# tries to bring the job back from R2 (see restoring_static.py): the players
+# of a reopened project used to 404 while the transcript requests were still
+# restoring it. Late-bound lambda: the restorer is defined further down.
+from restoring_static import RestoringStaticFiles
+app.mount("/videos", RestoringStaticFiles(
+    directory=OUTPUT_DIR,
+    restorer=lambda job_id: _restore_for_public_path(job_id)), name="videos")
 
 # Mount static files for serving thumbnails
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
@@ -2734,6 +2740,9 @@ async def download_all_clips(job_id: str, request: Request):
 # edit endpoint works on it again. Restored files land with a fresh mtime, so
 # the retention clock restarts; re-restoring after a purge is cheap.
 _restore_locks: Dict[str, asyncio.Lock] = {}
+# Job ids are uuid4 strings; anything else under /videos is not a job dir
+# (thumbnails, stray probes) and must not reach the database.
+_JOB_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 
 @app.post("/api/projects/{job_id}/restore")
@@ -2753,6 +2762,27 @@ async def restore_project(job_id: str, request: Request):
     if proj is None or str(proj.user_id) != str(user.id):
         raise HTTPException(status_code=404, detail="Project not found")
 
+    await _restore_job_files(job_id, proj, str(user.id))
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "result": jobs[job_id]['result'],
+        "project_state": proj.state,
+        "title": proj.title,
+    }
+
+
+async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
+    """Bring a project's working files back from R2 and register the job.
+
+    The ownership check is the caller's job: ``restore_project`` (the
+    endpoint) verifies the session, ``_restore_for_public_path`` serves files
+    that are public by job id anyway. Returns True when files were actually
+    pulled, False on the idempotent fast path (everything already on disk).
+    """
+    from cloud import storage as cloud_storage
+
+    pulled = False
     # Per-job lock: a double click must not download the project twice.
     lock = _restore_locks.setdefault(job_id, asyncio.Lock())
     async with lock:
@@ -2769,7 +2799,7 @@ async def restore_project(job_id: str, request: Request):
         ):
             os.utime(job_dir, None)  # restart the retention clock
         else:
-            prefix = cloud_storage.job_key(user.id, job_id, "")
+            prefix = cloud_storage.job_key(user_id, job_id, "")
             keys = await asyncio.to_thread(cloud_storage.list_keys, prefix)
             if not keys:
                 raise HTTPException(status_code=502,
@@ -2796,7 +2826,8 @@ async def restore_project(job_id: str, request: Request):
                 raise HTTPException(status_code=502, detail=f"Restore download failed: {e}")
             # Owner sidecar keeps the multi-tenant guard after a server restart.
             with open(os.path.join(tmp_dir, ".owner"), "w") as f:
-                f.write(str(user.id))
+                f.write(user_id)
+            pulled = True
             if os.path.isdir(job_dir):
                 for fname in os.listdir(tmp_dir):
                     shutil.move(os.path.join(tmp_dir, fname), os.path.join(job_dir, fname))
@@ -2823,17 +2854,41 @@ async def restore_project(job_id: str, request: Request):
             'status': 'completed',
             'logs': ["♻️ Project restored from your library."],
             'output_dir': job_dir,
-            'user_id': str(user.id),
+            'user_id': user_id,
             'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
         }
+    if pulled:
+        print(f"♻️  Restored {job_id} from the library (working files were gone).")
+    return pulled
 
-    return {
-        "job_id": job_id,
-        "status": "completed",
-        "result": jobs[job_id]['result'],
-        "project_state": proj.state,
-        "title": proj.title,
-    }
+
+async def _restore_for_public_path(job_id: str) -> bool:
+    """Restorer for the /videos mount: a miss under /videos/<job_id>/ pulls
+    the project back from R2 for its owner, without a session. Those files
+    are public by job id already (the mount has no auth), so this grants
+    nothing new; it only stops a reopened project's players from 404ing
+    while the API side is still restoring it. True means "look again".
+    """
+    if not BILLING_ENABLED or not _JOB_ID_RE.match(job_id or ""):
+        return False
+    from sqlalchemy import select
+    from cloud.models import Project
+    from cloud import database as cloud_db
+    async with cloud_db.session() as s:
+        proj = (await s.execute(
+            select(Project).where(Project.job_id == job_id)
+        )).scalar_one_or_none()
+    if proj is None:
+        return False
+    try:
+        await _restore_job_files(job_id, proj, str(proj.user_id))
+    except HTTPException as e:
+        print(f"⚠️  /videos restore of {job_id} failed: {e.detail}")
+        return False
+    except Exception as e:
+        print(f"⚠️  /videos restore of {job_id} failed: {e}")
+        return False
+    return True
 
 
 async def _ensure_job_files(job_id: str, request: Request) -> bool:
@@ -2854,7 +2909,6 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
         return False
     try:
         await restore_project(job_id, request)
-        print(f"♻️  Auto-restored {job_id} from the library (working files were gone).")
         return True
     except HTTPException:
         return False
