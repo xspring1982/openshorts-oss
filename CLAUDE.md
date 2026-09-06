@@ -336,13 +336,27 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 
 Downloads go direct → static ISP proxies (flat rate) → DataImpulse (per GB),
 and the duration probe (`cloud/metering.probe_url_minutes`) follows the same
-order, with one extra free step before any per-GB attempt: the conservative
-clients (tv_embed/android) through a static (`fallback-static`), because
-YouTube serves the HD/web client a fake "Video unavailable" from
-datacenter-ISP IPs on some videos while those clients pass on the same IPs. Two rules keep the per-GB proxy at zero on a normal day: the probe
+order, with one extra free step before any per-GB attempt: the fallback
+clients through a static (`fallback-static`). **The client list is explicit
+and shared** (`yt_clients.py`: `default,mweb` + the bgutil PO token
+provider): with account cookies yt-dlp's own defaults are `tv_downgraded` +
+`web`, and on a share of videos both come back UNPLAYABLE / SABR-only, which
+yt-dlp reports as "Video unavailable". That was mistaken for an IP ban for a
+week (it happened on every static IP too) and fed ~26 downloads a week to
+the per-GB proxy, which then fetched 360p through the same dead list.
+Measured in the prod container on 6-sep-2026, same static, same video:
+cookies + defaults → unavailable; cookies + `default,mweb` → 1080p; no
+cookies → 1080p. `mweb` needs the PO token, and the token needs the
+webpage: never put `player_skip: webpage` back. A fallback attempt runs
+anonymously when an HD attempt already failed with the cookies on that
+route, and every attempt asks for the 1080p format spec (the old
+`best[ext=mp4]` fallback spec was itself the 360p progressive file).
+Two rules keep the per-GB proxy at zero on a normal day: the probe
 reaches it **only** when a static route failed for a reason another IP can
 fix (`static_failure_warrants_paid`: bot-check, 403/429, proxy/network
-errors), never for a private/removed/members-only video or a live stream
+errors), never for a private/removed/members-only video, an uploader's
+country block (the residential pool failed identically in 5 of 6 paid
+probes, 3-5 sep) or a live stream
 with no duration (those failed the same on every IP and used to cost ~1.7 MB
 × 2 extractors each), and **never for a non-YouTube URL** (the download
 plan already excluded those; Twitch, Kick, Rumble and product pages were

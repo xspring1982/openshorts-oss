@@ -30,8 +30,7 @@ class TestStaticFailureWarrantsPaid:
                     "ERROR: [youtube] BJW5gAgk4bg: Video unavailable",
                     "HTTP Error 403: Forbidden", "HTTP Error 429: Too Many Requests",
                     "ProxyError: Tunnel connection failed: 407",
-                    "Unable to download webpage: The read operation timed out",
-                    "The uploader has not made this video available in your country"):
+                    "Unable to download webpage: The read operation timed out"):
             assert metering.static_failure_warrants_paid(err), err
 
     def test_content_failures_do_not(self):
@@ -39,7 +38,10 @@ class TestStaticFailureWarrantsPaid:
                     "This video has been removed by the uploader",
                     "Join this channel to get access to members-only content",
                     "no duration in metadata", "Premieres in 3 hours",
-                    "Unsupported URL: https://shopee.vn/product", "Sign in to confirm your age"):
+                    "Unsupported URL: https://shopee.vn/product", "Sign in to confirm your age",
+                    # the paid pool exits from the same blocked countries: 5 of 6
+                    # paid probes 3-5 sep 2026 failed with the identical error
+                    "The uploader has not made this video available in your country"):
             assert not metering.static_failure_warrants_paid(err), err
 
     def test_unknown_errors_stay_free(self):

@@ -783,18 +783,13 @@ def download_youtube_video(url, output_dir="."):
     # conservative fallback (also the only strategy for self-host).
     _bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     _bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
-    if _bgutil_http:
-        hd_args = {'youtubepot-bgutilhttp': {'base_url': [_bgutil_http]}}
-    elif _bgutil_script:
-        hd_args = {'youtubepot-bgutilscript': {'script_path': [_bgutil_script]}}
-    else:
-        hd_args = None
-    fallback_args = {
-        'youtube': {
-            'player_client': ['tv_embed', 'android', 'mweb', 'web'],
-            'player_skip': ['webpage', 'configs'],
-        }
-    }
+    # Client lists live in yt_clients.py (shared with the duration probe):
+    # explicit `default,mweb` because the authed defaults alone return
+    # "Video unavailable" on a share of videos, from every IP, and that was
+    # what fed the per-GB proxy (6-sep-2026, verified in the prod container).
+    from yt_clients import hd_extractor_args, fallback_extractor_args
+    hd_args = hd_extractor_args(_bgutil_http, _bgutil_script)
+    fallback_args = fallback_extractor_args(_bgutil_http, _bgutil_script)
 
     # Cap at 720p ONLY when the bytes actually go through the PER-GB paid proxy
     # — that cap exists to control bandwidth cost, and the direct attempt and
@@ -812,12 +807,11 @@ def download_youtube_video(url, output_dir="."):
         return ('bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
                 'bestvideo[vcodec^=avc1][height<=1080]+bestaudio/'
                 'best[height<=1080][ext=mp4]/best[ext=mp4]/best')
-    fallback_fmt = 'best[ext=mp4]/best'
 
-    def _base_opts(extractor_args, proxy):
+    def _base_opts(extractor_args, proxy, cookies=True):
         return {
             'quiet': False, 'verbose': True, 'no_warnings': False,
-            'cookiefile': cookies_path if cookies_path else None,
+            'cookiefile': cookies_path if (cookies and cookies_path) else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
             'nocheckcertificate': True, 'cachedir': False,
             'extractor_args': extractor_args,
@@ -844,17 +838,17 @@ def download_youtube_video(url, output_dir="."):
                                       or d.get('total_bytes_estimate')
                                       or d.get('downloaded_bytes') or 0)
 
-    def _attempt(extractor_args, fmt, proxy):
+    def _attempt(extractor_args, fmt, proxy, cookies=True):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
-        with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy)) as ydl:
+        with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
         if os.path.exists(expected):
             os.remove(expected)
         dl_opts = {
-            **_base_opts(extractor_args, proxy),
+            **_base_opts(extractor_args, proxy, cookies),
             'format': fmt,
             'outtmpl': os.path.join(output_dir, f'{sanitized}.%(ext)s'),
             'merge_output_format': 'mp4', 'overwrites': True,
@@ -870,11 +864,21 @@ def download_youtube_video(url, output_dir="."):
     _direct_first = (os.environ.get("DIRECT_FIRST", "").strip() == "1"
                      and (_proxy or _statics) and hd_args and cookies_path)
 
+    # A fallback attempt runs anonymously when an HD attempt (with cookies)
+    # already failed on the same route: the account cookies are what narrows
+    # yt-dlp to the clients that die with "Video unavailable", and the
+    # anonymous defaults were measured at 1080p on the same static IP. With
+    # no HD path at all (self-host without a PO token provider) the fallback
+    # is the only attempt, so it keeps the cookies the operator configured.
+    # Every attempt asks for the same 1080p spec: the fallback used to ask
+    # for `best[ext=mp4]/best`, the best single-file format, which on
+    # YouTube is the 360p progressive one even with 1080p streams listed.
     attempts = [
         (label,
          fallback_args if label.startswith('fallback') else hd_args,
-         fallback_fmt if label.startswith('fallback') else _hd_fmt_for(capped),
-         proxy)
+         _hd_fmt_for(capped),
+         proxy,
+         not (label.startswith('fallback') and hd_args))
         for label, capped, proxy in plan_download_attempts(
             _direct_first, _statics, _proxy, bool(hd_args), youtube=is_youtube_url(url))
     ]
@@ -888,7 +892,7 @@ def download_youtube_video(url, output_dir="."):
     # below so app.py can keep a durable trail of WHY a job reached the paid
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
-    for label, ea, fmt, proxy in attempts:
+    for label, ea, fmt, proxy, cookies in attempts:
         # A 403 on the media fetch is usually transient: the googlevideo URL is
         # bound to the IP that extracted it, and the residential proxy rotates
         # its exit IP between requests. Retrying re-extracts and usually lands
@@ -896,7 +900,7 @@ def download_youtube_video(url, output_dir="."):
         for retry in range(2):
             try:
                 print(f"📥 Download attempt: {label}" + (f" (retry {retry})" if retry else ""))
-                sanitized_title = _attempt(ea, fmt, proxy)
+                sanitized_title = _attempt(ea, fmt, proxy, cookies)
                 # Only bytes through the PER-GB proxy cost money; direct and
                 # the flat-rate static proxies are free bandwidth for the
                 # monthly counter's purposes.
