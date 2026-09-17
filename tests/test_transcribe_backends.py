@@ -282,3 +282,16 @@ def test_whisper_model_is_fetched_inside_the_gate(monkeypatch):
     tb._run_whisper_once("x.mp4")
 
     assert order == ["gate", "model", "transcribe"]
+
+
+def test_release_models_drops_the_transnetv2_singleton_too(monkeypatch):
+    import types
+    fake = types.ModuleType("scene_detection")
+    fake._tn2_model = object()
+    monkeypatch.setitem(sys.modules, "scene_detection", fake)
+    monkeypatch.setattr(tb, "_whisper_model", None)
+    monkeypatch.setattr(tb, "_parakeet_model", None)
+
+    tb.release_models()
+
+    assert fake._tn2_model is None

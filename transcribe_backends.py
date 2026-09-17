@@ -244,6 +244,11 @@ def release_models():
         except Exception as e:
             print(f"⚠️ [ASR] whisper unload failed ({type(e).__name__}: {e})")
     del whisper, parakeet
+    # TransNetV2 is the other torch tenant an in-process pipeline leaves
+    # behind (scene_detection keeps it as a module singleton too).
+    tn2 = sys.modules.get("scene_detection")
+    if tn2 is not None:
+        tn2._tn2_model = None
     import gc
     gc.collect()
     try:
