@@ -40,6 +40,10 @@ class DetailClipModel(BaseModel):
     video_description_for_instagram: str
     video_title_for_youtube_short: str
     viral_hook_text: str
+    # One sentence on what makes THIS moment a clip, shown under the score in
+    # the dashboard. Defaulted so a small local model that skips it does not
+    # fail schema validation and lose the clip.
+    why: str = ""
 
 
 class DetailResponse(BaseModel):
@@ -327,6 +331,8 @@ COPY RULES — ALL text fields (descriptions, title, hook) MUST be written in TR
   without spoiling it, then 3-5 topically relevant hashtags. No generic hashtag spam.
 - `video_title_for_youtube_short`: max 100 chars, curiosity-driven, no fake claims.
 - `predicted_score`: honest 0-100 estimate of viral potential.
+- `why`: one sentence, max 20 words, naming what makes THIS moment worth a
+  clip — the specific hook, claim, number or payoff, not the topic.
 
 TRANSCRIPT_LANGUAGE: {language}
 VIDEO_DURATION_SECONDS: {video_duration}
@@ -344,7 +350,8 @@ Return only:
       "video_description_for_tiktok": "<description + hashtags>",
       "video_description_for_instagram": "<description + hashtags>",
       "video_title_for_youtube_short": "<title max 100 chars>",
-      "viral_hook_text": "<short overlay max 10 words>"
+      "viral_hook_text": "<short overlay max 10 words>",
+      "why": "<one sentence, max 20 words>"
     }}
   ]
 }}

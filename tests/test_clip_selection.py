@@ -6,6 +6,7 @@ import pytest
 from clip_selection import (
     build_transcript_windows,
     clip_count_targets,
+    dedupe_overlapping,
     snap_clip_to_words,
     compact_words,
     lookup_model_prices,
@@ -215,3 +216,31 @@ class TestTrimToBest:
     def test_max_clips_is_never_below_one(self):
         shorts = [self._clip(0, 10), self._clip(50, 20)]
         assert len(trim_to_best(shorts, 0)) == 1
+
+
+class TestDedupeOverlapping:
+    """Two picks from one window can cover the same seconds with different
+    edges; the DIVERSITY rule in the prompt is not a guarantee."""
+
+    @staticmethod
+    def _clip(start, end, score):
+        return {"start": start, "end": end, "predicted_score": score}
+
+    def test_keeps_the_better_scored_of_two_overlapping(self):
+        a, b = self._clip(10, 40, 70), self._clip(20, 50, 85)  # 20 s shared of 30 s
+        assert dedupe_overlapping([a, b]) == [b]
+        assert dedupe_overlapping([b, a]) == [b]
+
+    def test_small_overlap_keeps_both_in_input_order(self):
+        # 5 s shared of 30 s: under the ratio, both survive, order untouched
+        # (the detail pass already hands clips back in transcript order).
+        a, b = self._clip(10, 40, 70), self._clip(35, 65, 85)
+        assert dedupe_overlapping([a, b]) == [a, b]
+
+    def test_tie_keeps_the_earlier(self):
+        a, b = self._clip(10, 40, 80), self._clip(15, 45, 80)
+        assert dedupe_overlapping([a, b]) == [a]
+
+    def test_disjoint_untouched(self):
+        clips = [self._clip(0, 30, 50), self._clip(30, 60, 60), self._clip(100, 130, 40)]
+        assert dedupe_overlapping(clips) == clips

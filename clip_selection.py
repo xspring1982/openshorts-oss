@@ -196,6 +196,45 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def dedupe_overlapping(shorts, ratio=0.5):
+    """Drop clips that overlap an already-kept clip by ``ratio`` of the
+    shorter one, keeping the higher ``predicted_score`` (earlier on a tie).
+
+    The detail prompt's DIVERSITY rule is the only thing that stopped two
+    clips from sharing the same seconds, and a rule is not a guarantee: two
+    picks from one window can cover the same moment with different edges,
+    and the user then downloads the same short twice. Survivors come back in
+    transcript order, like ``trim_to_best``.
+    """
+    def _score(c):
+        try:
+            return float(c.get("predicted_score") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    def _span(c):
+        try:
+            return float(c.get("start", 0)), float(c.get("end", 0))
+        except (TypeError, ValueError, AttributeError):
+            return 0.0, 0.0
+
+    indexed = list(enumerate(shorts))
+    kept = []
+    for idx, clip in sorted(indexed, key=lambda p: (-_score(p[1]), p[0])):
+        s, e = _span(clip)
+        clash = False
+        for _, other in kept:
+            os_, oe = _span(other)
+            overlap = min(e, oe) - max(s, os_)
+            shorter = max(1e-6, min(e - s, oe - os_))
+            if overlap > 0 and overlap / shorter >= ratio:
+                clash = True
+                break
+        if not clash:
+            kept.append((idx, clip))
+    return [c for _, c in sorted(kept, key=lambda p: p[0])]
+
+
 def snap_clip_to_words(start, end, words, video_duration,
                        min_duration=15.0, max_duration=60.0,
                        search_window=1.5, max_lead=0.35, max_tail=0.45):
