@@ -1809,7 +1809,7 @@ def get_visual_clips(video_path, video_duration, language="en"):
 
     file_upload = None
     try:
-        file_upload = client.files.upload(file=video_path)
+        file_upload = gemini_worker.upload_media(client, video_path)
         deadline = time.time() + 180
         while True:
             info = client.files.get(name=file_upload.name)

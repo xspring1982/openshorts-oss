@@ -1,5 +1,6 @@
 import argparse
 import json
+import mimetypes
 import os
 import sys
 from typing import List, Optional
@@ -403,6 +404,34 @@ def _parse_json_response_text(text: str) -> dict:
         except json.JSONDecodeError as e:
             last_error = e
     raise ValueError(f"Failed to parse Gemini JSON response: {last_error}")
+
+
+def upload_media(client, path, mime_type=None):
+    """Upload a local file to the Gemini Files API, by handle and never by path.
+
+    Handed a path, the SDK copies ``os.path.basename(path)`` verbatim into the
+    ``X-Goog-Upload-File-Name`` header, and httpx encodes header values as
+    ASCII. The downloaded source is named after the video's title, so every
+    video whose title is written in Japanese, Cyrillic, Arabic or Greek died
+    before a byte left the container with ``'ascii' codec can't encode
+    characters in position 0-4`` (prod, 20-sep-2026) — on the three stages
+    that upload the whole file: the silent-footage vision pass, the screencast
+    detector and the AI editor. Passing an open handle skips that header
+    entirely; the readable name still travels as ``display_name``, which goes
+    in the JSON body and is UTF-8 all the way.
+    """
+    guessed = mime_type or mimetypes.guess_type(path)[0] or ""
+    # Every caller uploads the source video; an extension the stdlib does not
+    # know (or knows as octet-stream) must not reach the API as a type it
+    # refuses, so fall back to the container the pipeline always writes.
+    if not guessed.startswith(("video/", "audio/", "image/")):
+        guessed = "video/mp4"
+    with open(path, "rb") as fh:
+        return client.files.upload(
+            file=fh,
+            config={"mime_type": guessed,
+                    "display_name": os.path.basename(path)},
+        )
 
 
 class GeminiBlockedError(ValueError):
