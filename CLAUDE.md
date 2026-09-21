@@ -464,11 +464,16 @@ the user gets a 400 for a valid link (26 of the 37 paid probes between
 7 and 17-sep-2026). And the probe keeps **every** attempt's error per
 static route, not the last one: the anonymous retry ends in a bot-check
 by design, and a "confirm your age" from the cookie attempt is the
-verdict, so it must not be overwritten into an escalation. A search,
-playlist or channel URL is refused by path before any request
+verdict, so it must not be overwritten into an escalation. A URL that is
+not one video is refused by path before any request
 (`yt_clients.youtube_non_video_reason`): `noplaylist` does nothing for
 those and yt-dlp walks them entry by entry (one search URL held the
-probe thread for 37 min in the prod container).
+probe thread for 37 min in the prod container). That check is an
+**allowlist** of the paths that carry a video id, not a list of the bad
+ones: while it named the pages it knew, a hashtag page and the legacy
+`/<vanity>` channel URL went straight through, and one of them walked to
+page 23 on the static pool and then paid the per-GB proxy to walk it
+again (20-sep-2026).
 `PAID_PROXY_DAILY_MB` (default
 500) is the hard ceiling: past it the paid proxy is dropped from the probe
 and from every new job's env until UTC midnight. The watcher probes the
