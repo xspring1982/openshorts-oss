@@ -478,6 +478,62 @@ publish_jobs: Dict[str, Dict] = {}  # {publish_id: {status, result, error}}
 concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 
 
+# Queue position + ETA for /api/status. ``_admitting`` holds jobs already taken
+# off the queue that wait for a free slot / GPU room: they go before anything
+# still queued. Durations are a rolling sample of this instance's finished jobs.
+_admitting: set = set()
+_recent_job_seconds: list = []
+DEFAULT_JOB_SECONDS = 240
+
+
+def _record_job_duration(seconds):
+    if seconds and seconds > 0:
+        _recent_job_seconds.append(float(seconds))
+        del _recent_job_seconds[:-30]
+
+
+def queue_estimate(ahead: int, running: int, slots: int, typical_seconds: float) -> int:
+    """Seconds until a job with ``ahead`` jobs in front of it starts.
+
+    With a slot free it starts right away (a few seconds of admission);
+    otherwise each full round of ``slots`` jobs ahead costs about one typical
+    job, since the running ones are on average half done.
+    """
+    slots = max(1, int(slots))
+    free = max(0, slots - int(running))
+    if ahead < free:
+        return 15
+    waiting = ahead - free + 1
+    rounds = waiting / slots
+    return int(max(30, round(typical_seconds * (0.5 + rounds - 1 / slots))))
+
+
+def queue_snapshot(job_id):
+    """``{position, ahead, eta_seconds}`` for a queued job, else None."""
+    job = jobs.get(job_id) or {}
+    if job.get('status') != 'queued':
+        return None
+    try:
+        entries = sorted(job_queue._queue)  # (priority, seq, job_id)
+    except Exception:
+        entries = []
+    queued_ids = [e[2] for e in entries
+                  if (jobs.get(e[2]) or {}).get('status') == 'queued']
+    if job_id in _admitting:
+        ahead = len([j for j in _admitting if j != job_id])
+    elif job_id in queued_ids:
+        ahead = len(_admitting) + queued_ids.index(job_id)
+    else:
+        return None
+    sample = sorted(_recent_job_seconds)
+    typical = sample[len(sample) // 2] if sample else DEFAULT_JOB_SECONDS
+    return {
+        "position": ahead + 1,
+        "ahead": ahead,
+        "eta_seconds": queue_estimate(ahead, len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
+    }
+
+
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
 
@@ -678,6 +734,8 @@ def _recover_jobs_from_disk():
         job_path = os.path.join(OUTPUT_DIR, job_id)
         if not os.path.isdir(job_path) or job_id in jobs:
             continue
+        if os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
+            continue  # in flight (interrupted or on the other instance): resume, not recover
         json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
         if not json_files:
             continue
@@ -1065,10 +1123,9 @@ def _resume_interrupted_jobs() -> set:
         manifest_path = os.path.join(job_path, _RESUME_FILE)
         if not os.path.isfile(manifest_path):
             continue
-        if glob.glob(os.path.join(job_path, "*_metadata.json")):
-            # Finished after all — recovered as completed already.
-            _clear_resume_manifest(job_id)
-            continue
+        # A manifest outlives only an interrupted run (the job wrapper drops it
+        # at every terminal state), so a metadata file next to it means the job
+        # was stopped mid-render, not that it finished: resume it too.
         try:
             with open(manifest_path) as f:
                 m = json.load(f)
@@ -1380,14 +1437,17 @@ async def process_queue():
                 continue
 
             # Acquire semaphore slot (waits if max jobs are running)
+            _admitting.add(job_id)
             await concurrency_semaphore.acquire()
             if _draining:
+                _admitting.discard(job_id)
                 concurrency_semaphore.release()
                 job_queue.task_done()
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
                 continue
             # The old container may still be draining its jobs on this GPU.
             await _wait_for_shared_gpu()
+            _admitting.discard(job_id)
             if _draining:
                 concurrency_semaphore.release()
                 job_queue.task_done()
@@ -1458,12 +1518,37 @@ async def run_job_wrapper(job_id):
     # and if the entry is dropped from ``jobs`` mid-run the reservation must
     # still be settled (released) instead of staying held for hours.
     job = jobs.get(job_id)
+    interrupted = False
+    started = time.monotonic()
     try:
         if job:
             await run_job(job_id, job)
+            if job.get('status') == 'completed':
+                _record_job_duration(time.monotonic() - started)
+    except asyncio.CancelledError:
+        # The server is shutting down (drain timeout of a deploy) and took this
+        # task with it. Not a failure: the manifest stays on disk and the next
+        # instance resumes the job (22-sep-2026: 6 jobs were marked failed and
+        # refunded at once this way instead).
+        interrupted = True
     except Exception as e:
          print(f"❌ Job wrapper error {job_id}: {e}")
     finally:
+        if interrupted or (_stopping and job and job.get('status') != 'completed'):
+            _running_jobs.discard(job_id)
+            concurrency_semaphore.release()
+            job_queue.task_done()
+            print(f"♻️ Server stopping: leaving {job_id} for the next instance.")
+            if interrupted:
+                raise asyncio.CancelledError()
+            return
+        if _should_auto_retry(job):
+            _schedule_auto_retry(job_id, job)
+            _running_jobs.discard(job_id)
+            concurrency_semaphore.release()
+            job_queue.task_done()
+            print(f"🔁 Released slot for job {job_id} (auto-retry scheduled).")
+            return
         # The subprocess returned (success or genuine failure) — a terminal
         # state, so drop the resume manifest. It only survives if the container
         # was killed mid-run, which is exactly when we want to resume.
@@ -1491,6 +1576,79 @@ async def run_job_wrapper(job_id):
         concurrency_semaphore.release()
         job_queue.task_done()
         print(f"✅ Released slot for job: {job_id}")
+
+
+# --- Automatic retry of transient failures ----------------------------------
+# A job that dies of a condition on OUR side (a full GPU, an NVENC session
+# refused, a Gemini 5xx) is run once more by itself instead of showing the user
+# "failed". Content problems (no audio, private video, nothing clip-shaped,
+# policy block) fail as before: retrying cannot fix them.
+AUTO_RETRY_LIMIT = int(os.environ.get("AUTO_RETRY_LIMIT", "1"))
+AUTO_RETRY_DELAY_SECONDS = float(os.environ.get("AUTO_RETRY_DELAY_SECONDS", "30"))
+_TRANSIENT_MARKERS = (
+    "out of memory", "outofmemory", "cuda", "cublas", "cudnn", "nvenc",
+    "generic error in an external library", "exit code 187", "broken pipe",
+    "no clips could be rendered", "resource_exhausted", "resource exhausted",
+    "503", "502", "500 internal", "overloaded", "deadline exceeded",
+    "exit code -9", "exit code -15", "killed",
+)
+_PERMANENT_MARKERS = (
+    "no audio", "no_audio", "video unavailable", "private video", "members-only",
+    "prohibited_content", "blocked this video", "blocked its answer",
+    "did not return usable clips", "clip detection failed", "short-form content",
+    "sign in to confirm your age", "not available in your country",
+)
+
+
+def is_transient_failure(logs) -> bool:
+    """Whether a failed job's logs describe something a second run can fix."""
+    text = _job_error_text(list(logs or [])).lower()
+    if any(m in text for m in _PERMANENT_MARKERS):
+        return False
+    return any(m in text for m in _TRANSIENT_MARKERS)
+
+
+def _should_auto_retry(job) -> bool:
+    return bool(job and job.get('status') == 'failed' and not _draining
+                and int(job.get('auto_retries') or 0) < AUTO_RETRY_LIMIT
+                and job.get('cmd') and is_transient_failure(job.get('logs')))
+
+
+def _clean_for_retry(output_dir):
+    """Drop the half-made outputs of a failed run; keep the source, the
+    transcript checkpoint (the retry skips transcription), owner and manifest."""
+    try:
+        names = os.listdir(output_dir)
+    except OSError:
+        return
+    for name in names:
+        if ("_clip_" in name or name.endswith("_metadata.json")
+                or name.startswith(("temp_", "hooked_", "autosubs_"))):
+            try:
+                os.remove(os.path.join(output_dir, name))
+            except OSError:
+                pass
+
+
+def _schedule_auto_retry(job_id, job):
+    job['auto_retries'] = int(job.get('auto_retries') or 0) + 1
+    job['status'] = 'queued'
+    job['result'] = None
+    job['ready_files'] = {}
+    job['logs'].append("🔁 A temporary server problem interrupted your video. "
+                       "Retrying it automatically, no minutes are charged twice.")
+    _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id))
+    m = _read_manifest(job_id) or {}
+    priority = int(m.get("priority", 1))
+    print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
+          f"in {AUTO_RETRY_DELAY_SECONDS:.0f}s.")
+
+    async def _later():
+        await asyncio.sleep(AUTO_RETRY_DELAY_SECONDS)
+        if job_id in jobs and jobs[job_id].get('status') == 'queued':
+            _enqueue_job(job_id, priority)
+
+    asyncio.create_task(_later())
 
 
 async def _archive_managed_job(job_id):
@@ -2109,7 +2267,16 @@ async def run_job(job_id, job_data):
         start_wait = time.time()
         last_heartbeat = time.time()
         while process.poll() is None:
-            await asyncio.sleep(2)
+            try:
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                # Shutting down: stop the child so it cannot keep writing into
+                # the job dir while the next instance resumes the same job.
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                raise
             if time.time() - last_heartbeat >= HEARTBEAT_EVERY:
                 _touch_manifest(job_id)
                 last_heartbeat = time.time()
@@ -2823,11 +2990,11 @@ def _job_view_from_disk(job_id):
     job_path = os.path.join(OUTPUT_DIR, job_id)
     if not os.path.isdir(job_path):
         return None
-    if glob.glob(os.path.join(job_path, "*_metadata.json")):
-        _recover_jobs_from_disk()
-        return jobs.get(job_id)
     m = _read_manifest(job_id)
     if m is None:
+        if glob.glob(os.path.join(job_path, "*_metadata.json")):
+            _recover_jobs_from_disk()
+            return jobs.get(job_id)
         return None
     alive = time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER
     owner = m.get("user_id")
@@ -2862,6 +3029,8 @@ async def get_status(job_id: str, request: Request):
         "status": _presented_status(job_id, job),
         "logs": _visible_logs(job['logs']),
         "result": job.get('result'),
+        # Position in line and a rough wait while the job is still queued.
+        "queue": queue_snapshot(job_id),
         # Set when only the first part of the source was clipped (quota wall
         # offer), so the dashboard can say so next to the clips.
         "partial": job.get('partial'),

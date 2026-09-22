@@ -459,6 +459,22 @@ per hour at peak with `MAX_CONCURRENT_JOBS=8`):
   `nvidia-smi` reports at least `GPU_MIN_FREE_MB` (4500) free; an idle card
   always starts, and the wait is bounded by the drain timeout.
 
+Failures the user should never see (`app.run_job_wrapper`):
+- **Auto-retry**: a failed job whose error text is transient (CUDA/OOM,
+  NVENC "Generic error in an external library", cublas, Gemini 5xx, "No clips
+  could be rendered") is re-queued once after `AUTO_RETRY_DELAY_SECONDS` (30),
+  keeping its reservation and transcript checkpoint (`AUTO_RETRY_LIMIT`=1).
+  Content failures (no audio, private video, no clips found, policy block)
+  are final as before. Inside a job, `main.py` retries each failed clip once,
+  alone, after a pause, and renders clips best-score first.
+- **Shutdown is not failure**: when the drain timeout cancels a running job,
+  the child is killed and the manifest + reservation are kept, so the next
+  instance resumes it. A manifest next to a metadata file means "stopped
+  mid-render" and is resumed, not recovered as completed.
+- `/api/status` returns `queue: {position, ahead, eta_seconds}` while queued;
+  the dashboard shows it with a "paid plans skip the line" upsell (paid plans
+  do dispatch first: `PLAN_PRIORITY`).
+
 ### Paid proxy accounting (`cloud/proxy_ledger.py`)
 
 Downloads go direct → static ISP proxies (flat rate) → DataImpulse (per GB),

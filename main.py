@@ -1532,6 +1532,29 @@ def clear_transcript_checkpoint(output_dir):
         print(f"⚠️ Could not remove transcript checkpoint: {e}")
 
 
+CLIP_RETRY_PAUSE_SECONDS = float(os.environ.get("CLIP_RETRY_PAUSE_SECONDS", "10"))
+
+
+def clip_render_order(shorts):
+    """Indices of ``shorts`` best-first by ``predicted_score`` (ties and
+    unscored clips keep their original order, after the scored ones)."""
+    def score(i):
+        try:
+            return float(shorts[i].get("predicted_score"))
+        except (TypeError, ValueError, AttributeError):
+            return float("-inf")
+    return sorted(range(len(shorts)), key=lambda i: (-score(i), i))
+
+
+def _free_gpu_cache():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def transcribe_video(video_path):
     print("🎙️  Transcribing video...")
     from transcribe_backends import transcribe_media, release_models, host_asr_slot
@@ -2140,15 +2163,35 @@ if __name__ == '__main__':
 
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
             shorts = clips_data['shorts']
+            failed = []
             with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:
-                futures = {pool.submit(_process_one_clip, i, clip): i
-                           for i, clip in enumerate(shorts)}
+                # Best clip first: the pool starts work in submission order, so
+                # the user's first delivered clip is the strongest one instead
+                # of whatever came first in the video.
+                futures = {pool.submit(_process_one_clip, i, shorts[i]): i
+                           for i in clip_render_order(shorts)}
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
-                        future.result()
+                        if not future.result():
+                            failed.append(i)
                     except Exception as e:
                         print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
+                        failed.append(i)
+
+            # A clip that failed mid-render is usually a transient GPU / NVENC
+            # condition on a busy card (22-sep-2026: 2 of 3 clips of a job "never
+            # rendered" during a CUDA OOM burst). Try each one once more, alone,
+            # after a pause and with the cache freed, before giving up on it.
+            for i in sorted(failed, key=lambda k: clip_render_order(shorts).index(k)):
+                print(f"   🔁 Retrying clip {i+1} once…")
+                time.sleep(CLIP_RETRY_PAUSE_SECONDS)
+                _free_gpu_cache()
+                try:
+                    if not _process_one_clip(i, shorts[i]):
+                        print(f"   ❌ Clip {i+1} failed again.")
+                except Exception as e:
+                    print(f"   ❌ Clip {i+1} failed again: {type(e).__name__}: {e}")
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.

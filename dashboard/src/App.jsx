@@ -261,6 +261,8 @@ function App() {
   // {processed_minutes, total_minutes} when the running/finished job clips
   // only the first part of the source (the quota wall's free offer).
   const [partialJob, setPartialJob] = useState(null);
+  // {position, ahead, eta_seconds} while the job waits in line, else null.
+  const [queueInfo, setQueueInfo] = useState(null);
   // Durable R2 URLs (per clip index) for the current job — used as a fallback when
   // the ephemeral local /videos/ files have been cleaned up (e.g. after a reload).
   const [durableClips, setDurableClips] = useState({});
@@ -716,8 +718,10 @@ function App() {
           }
 
           if (data.partial) setPartialJob(data.partial);
+          setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
 
           if (data.status === 'completed') {
+            setQueueInfo(null);
             setStatus('complete');
             clearInterval(interval);
             refreshMe();
@@ -1079,6 +1083,7 @@ function App() {
     setProjectState(null);
     setNoSource(false);
     setPartialJob(null);
+    setQueueInfo(null);
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -1928,6 +1933,26 @@ function App() {
                     {status.toUpperCase()}
                   </span>
                 </div>
+
+                {/* Waiting in line: say where and for how long, and that paid
+                    plans go first (they do: plan priority in the job queue). */}
+                {status === 'processing' && queueInfo && (
+                  <div className="mb-4 rounded-card border border-brass/40 bg-brass/5 px-4 py-3 text-sm">
+                    <p className="text-ink">
+                      {queueInfo.ahead === 0
+                        ? 'You are next in line. Starting in a moment…'
+                        : <>You are <b>#{queueInfo.position}</b> in line · about <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
+                    </p>
+                    {billingEnabled && !['starter', 'creator', 'pro'].includes(plan) && queueInfo.ahead > 0 && (
+                      <button
+                        onClick={() => { track('QueueUpsellClick', { props: { position: String(queueInfo.position) } }); setShowPlanChoice(true); }}
+                        className="mt-2 text-xs lowercase text-brass hover:underline"
+                      >
+                        paid plans skip the line →
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Video Preview */}
                 {processingMedia && (
