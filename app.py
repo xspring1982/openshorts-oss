@@ -69,6 +69,36 @@ QUALITY_GATE_MIN_HEIGHT = int(os.environ.get("QUALITY_GATE_MIN_HEIGHT", "720"))
 # failures were exactly this, one user retrying the same 24s video).
 MIN_SOURCE_SECONDS = int(os.environ.get("MIN_SOURCE_SECONDS", "45"))
 QUALITY_PROBE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quality_probe.py")
+
+# Server credentials the pipeline subprocesses (main.py, quality_probe.py) never
+# read: main.py and everything it imports use GEMINI_API_KEY / LLM_* / the
+# proxies / YOUTUBE_COOKIES and nothing from cloud/. A child that runs yt-dlp
+# and ffmpeg on user-supplied URLs and files has no business holding the
+# Stripe key, the JWT signing secret or the database password; one exploit
+# in that stack would otherwise hand over all of them.
+CHILD_ENV_DENYLIST = frozenset({
+    "DATABASE_URL", "POSTGRES_PASSWORD", "JWT_SECRET",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+    "SMTP_USER", "SMTP_PASSWORD",
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "AGENTLEDGER_API_KEY",
+    "MANAGED_UPLOAD_POST_API_KEY", "MANAGED_GEMINI_API_KEY", "UPLOAD_POST_API_KEY",
+    "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "OPENPANEL_CLIENT_SECRET", "ELEVENLABS_API_KEY",
+})
+
+
+def child_env(base=None):
+    """A copy of the environment for a pipeline subprocess, minus the server
+    secrets in CHILD_ENV_DENYLIST. Callers add GEMINI_API_KEY themselves."""
+    env = dict(os.environ if base is None else base)
+    for name in CHILD_ENV_DENYLIST:
+        env.pop(name, None)
+    return env
+
+
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Every log line in this module is emoji-prefixed, and a Windows console is
@@ -342,6 +372,7 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
     # Probe input duration (blocking → run in a thread). When today's paid
     # traffic is over budget, the probe (and below, the job itself) runs
     # without the per-GB proxy: statics or nothing.
+    paid_allowed = True
     try:
         from cloud import proxy_ledger as _pl
         paid_allowed = not await _pl.budget_exceeded()
@@ -379,6 +410,9 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
     reserve, partial = plan_partial_minutes(minutes, balance["remaining"], max_minutes)
     try:
         reservation_id = await _metering.reserve_minutes(user.id, reserve, job_id)
+        # Read by process_endpoint for the download's safety cut
+        # (SOURCE_CAP_MINUTES); kept off the return tuple on purpose.
+        request.state.reserved_minutes = reserve
     except _metering.QuotaExceeded as e:
         _maybe_send_quota_email(user)
         raise HTTPException(status_code=402, detail={
@@ -1060,7 +1094,7 @@ def _install_drain_signal_handler():
 
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
-                           partial=None):
+                           partial=None, source_cap_minutes=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         with open(path, "w") as f:
@@ -1080,6 +1114,8 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # A resumed job downloads the source again, so the cut must
                 # travel with it: only these minutes were reserved.
                 "partial": partial,
+                # Same reason for the whole-video jobs' safety cap.
+                "source_cap_minutes": source_cap_minutes,
             }, f)
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -1154,7 +1190,7 @@ def _resume_interrupted_jobs() -> set:
 
         # Rebuild env from scratch — the manifest holds no secrets. Managed
         # (cloud) jobs get the server key; self-host falls back to its env key.
-        env = os.environ.copy()
+        env = child_env()
         try:
             from cloud import proxy_ledger as _pl
             if BILLING_ENABLED and _pl.budget_exceeded_sync():
@@ -1175,6 +1211,10 @@ def _resume_interrupted_jobs() -> set:
             env["MAX_SOURCE_MINUTES"] = str(partial["processed_minutes"])
         else:
             env.pop("MAX_SOURCE_MINUTES", None)
+        if m.get("source_cap_minutes"):
+            env["SOURCE_CAP_MINUTES"] = str(m["source_cap_minutes"])
+        else:
+            env.pop("SOURCE_CAP_MINUTES", None)
 
         m["attempts"] = attempts
         try:
@@ -2418,7 +2458,7 @@ async def _probe_youtube_quality(url: str) -> dict:
         try:
             proc = subprocess.run(
                 [sys.executable, QUALITY_PROBE_SCRIPT, "--url", url],
-                capture_output=True, timeout=75,
+                capture_output=True, timeout=75, env=child_env(),
             )
             return json.loads(proc.stdout.decode(errors="replace").strip() or "{}")
         except Exception as e:
@@ -2427,6 +2467,59 @@ async def _probe_youtube_quality(url: str) -> dict:
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _run)
+
+
+async def _validate_source_url(url: str):
+    """400 unless ``url`` is safe to hand to yt-dlp: http(s) on a globally
+    routable host (security_utils) and, on YouTube, one video rather than a
+    search / playlist / channel page (yt_clients). The download and the
+    metering probe check the same things again; this is the one in front of
+    the quality probe, which used to have none."""
+    from security_utils import assert_public_url, UnsafeURLError
+    from yt_clients import youtube_non_video_reason
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, assert_public_url, url)
+    except UnsafeURLError as e:
+        raise HTTPException(status_code=400, detail=f"This URL can't be processed: {e}")
+    reason = youtube_non_video_reason(url)
+    if reason:
+        raise HTTPException(status_code=400, detail=(
+            f"This link is {reason}. Paste the link of one video "
+            "(youtube.com/watch?v=... or youtu.be/...)."))
+
+
+async def _quality_gate(url: str, force_low: bool):
+    """Run the pre-flight probe: raises 400 for a too-short source, returns
+    the needs_confirmation response for a low-resolution one, else None."""
+    probe = await _probe_youtube_quality(url)
+    # Hard reject, no confirm-and-retry: a too-short source fails the same
+    # way on every retry, so letting the user force it just burns the job.
+    source_duration = int(probe.get("duration") or 0)
+    if MIN_SOURCE_SECONDS > 0 and 0 < source_duration < MIN_SOURCE_SECONDS:
+        _reject_short_source(source_duration)
+    max_height = int(probe.get("max_height") or 0)
+    if not force_low and QUALITY_GATE_MIN_HEIGHT > 0 \
+            and 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
+        print(f"⚠️ Quality gate: only {max_height}p available for {url} — asking user first.")
+        return JSONResponse({
+            "needs_confirmation": True,
+            "quality_check": {
+                "max_height": max_height,
+                "min_height": QUALITY_GATE_MIN_HEIGHT,
+                "cookies_invalid": bool(probe.get("cookies_invalid")),
+            },
+        })
+    return None
+
+
+async def _drop_unstarted_job(reservation_id, job_output_dir):
+    """Undo a submission refused after its minutes were reserved."""
+    if reservation_id:
+        try:
+            await _metering.release_reservation(reservation_id)
+        except Exception as e:
+            print(f"⚠️ Could not release reservation {reservation_id}: {e}")
+    shutil.rmtree(job_output_dir, ignore_errors=True)
 
 
 def _media_duration_seconds(path: str) -> float:
@@ -2729,30 +2822,11 @@ async def process_endpoint(
     if url and DISABLE_YOUTUBE_URL:
         raise HTTPException(status_code=403, detail="YouTube URL ingest is disabled on this deployment. Please upload a file you own.")
 
-    # Pre-flight quality gate: probe the offered resolution BEFORE starting, so
-    # the user can abort (refresh cookies / update yt-dlp) instead of burning
-    # 20 min on a 360p-only source. Fail-open: any probe error starts normally.
-    # The probe also runs under force_low_quality so the short-source check
-    # can't be bypassed through the quality-gate confirm.
-    if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0):
-        probe = await _probe_youtube_quality(url)
-        # Hard reject, no confirm-and-retry: a too-short source fails the same
-        # way on every retry, so letting the user force it just burns the job.
-        source_duration = int(probe.get("duration") or 0)
-        if MIN_SOURCE_SECONDS > 0 and 0 < source_duration < MIN_SOURCE_SECONDS:
-            _reject_short_source(source_duration)
-        max_height = int(probe.get("max_height") or 0)
-        if not force_low and QUALITY_GATE_MIN_HEIGHT > 0 \
-                and 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
-            print(f"⚠️ Quality gate: only {max_height}p available for {url} — asking user first.")
-            return JSONResponse({
-                "needs_confirmation": True,
-                "quality_check": {
-                    "max_height": max_height,
-                    "min_height": QUALITY_GATE_MIN_HEIGHT,
-                    "cookies_invalid": bool(probe.get("cookies_invalid")),
-                },
-            })
+    # Refuse a URL no server-side fetch may touch before anything fetches it:
+    # the quality probe below used to run yt-dlp on it unvalidated (tailnet
+    # hosts included) and ahead of the balance / rate checks.
+    if url:
+        await _validate_source_url(url)
 
     # Capture attestation context for legal record (IP + timestamp + UA)
     client_ip = request.client.host if request.client else "unknown"
@@ -2779,7 +2853,7 @@ async def process_endpoint(
     # running this server. Every job then dies on `import cv2`. The quality
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
-    env = os.environ.copy()
+    env = child_env()
     if not paid_allowed:
         # Daily paid-proxy budget hit: this job runs on the free routes only.
         env.pop("PROXY_URL", None)
@@ -2930,6 +3004,35 @@ async def process_endpoint(
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
     user_id, priority, reservation_id, user_plan, partial = await reserve_process_minutes(
         request, url, input_path, job_id, max_minutes=max_minutes)
+
+    # Pre-flight quality gate: probe the offered resolution BEFORE starting, so
+    # the user can abort (refresh cookies / update yt-dlp) instead of burning
+    # 20 min on a 360p-only source. Fail-open: any probe error starts normally.
+    # The probe also runs under force_low_quality so the short-source check
+    # can't be bypassed through the quality-gate confirm. It runs AFTER the
+    # metering step (entitlement, job limit, balance, the hourly probe cap), so
+    # an account with no minutes cannot use it as a free yt-dlp runner; a
+    # rejection hands the reservation back.
+    if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0):
+        try:
+            gate = await _quality_gate(url, force_low)
+        except BaseException:
+            await _drop_unstarted_job(reservation_id, job_output_dir)
+            raise
+        if gate is not None:
+            await _drop_unstarted_job(reservation_id, job_output_dir)
+            return gate
+
+    # A metered URL job never processes more than it paid for: the duration
+    # came from the metering probe, but the download is a second request and
+    # a server can answer it with a much longer file. main.py cuts anything
+    # clearly past the reserved minutes (partial jobs already carry a cut).
+    source_cap = getattr(request.state, "reserved_minutes", None)
+    if url and source_cap and not partial:
+        env["SOURCE_CAP_MINUTES"] = str(source_cap)
+    else:
+        env.pop("SOURCE_CAP_MINUTES", None)
+        source_cap = None
     if partial:
         # main.py cuts the source down to this many minutes before anything
         # reads it, so the whole pipeline (and the editor) sees a short video.
@@ -2978,7 +3081,8 @@ async def process_endpoint(
     _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id,
                            watermark=jobs[job_id]['watermark'],
                            webhook_url=webhook_url, webhook_secret=webhook_secret,
-                           base_url=api_base, partial=partial)
+                           base_url=api_base, partial=partial,
+                           source_cap_minutes=source_cap)
 
     _enqueue_job(job_id, priority)
 
@@ -4337,6 +4441,8 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
 
 # --- Remotion Render Proxy ---
 RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://renderer:3100")
+# render id -> owner user id (None for self-host / BYOK), for the status poll.
+_render_owners: Dict[str, Optional[str]] = {}
 
 @app.post("/api/render")
 async def proxy_render(request: Request):
@@ -4351,6 +4457,8 @@ async def proxy_render(request: Request):
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{RENDER_SERVICE_URL}/render", json=body)
         result = resp.json()
+        if isinstance(result, dict) and result.get("renderId"):
+            _render_owners[str(result["renderId"])] = await _owner_id(request)
         if reservation_id:
             await _metering.commit_reservation(reservation_id)
         return result
@@ -4360,9 +4468,19 @@ async def proxy_render(request: Request):
         raise HTTPException(status_code=502, detail=f"Render service unavailable: {e}")
 
 @app.get("/api/render/{render_id}")
-async def proxy_render_status(render_id: str):
+async def proxy_render_status(render_id: str, request: Request):
     """Proxy render status polling to the Node.js Remotion render service."""
     import httpx
+    # The id goes into the upstream path: ids are uuids, nothing else passes.
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", render_id or ""):
+        raise HTTPException(status_code=404, detail="Not found")
+    if BILLING_ENABLED:
+        # Only the account that started the render may poll it (and read its
+        # output URL). An id this instance never issued is refused rather than
+        # passed through.
+        if render_id not in _render_owners:
+            raise HTTPException(status_code=404, detail="Not found")
+        await _assert_job_owner(request, {"user_id": _render_owners[render_id]})
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{RENDER_SERVICE_URL}/render/{render_id}")
@@ -5149,7 +5267,10 @@ async def get_social_user(request: Request):
                 raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch user: {resp.text}")
             
             data = resp.json()
-            print(f"🔍 Upload-Post User Response: {data}")
+            # Never log the body: on the managed key it lists every profile
+            # on the account (usernames, redirect URLs), ~2 MB per call.
+            _n = len(data.get('profiles') or []) if isinstance(data, dict) else 0
+            print(f"🔍 Upload-Post users: {_n} profiles")
             
             user_id = None
             # The structure is {'success': True, 'profiles': [{'username': '...'}, ...]}
@@ -5698,6 +5819,11 @@ async def thumbnail_generate(
                 "error": "plan_required",
                 "message": "AI thumbnail generation is available on paid plans.",
             })
+    # The session carries someone's transcript, titles and frames: only its
+    # owner may generate from it (and be billed for it).
+    _sess = thumbnail_sessions.get(session_id)
+    if _sess is not None:
+        await _assert_job_owner(request, _sess)
 
     # Clamp count
     count = min(max(1, count), 6)
@@ -5890,7 +6016,8 @@ async def thumbnail_publish(
 
     # Generate a unique ID for this publish job so the frontend can poll
     publish_id = str(uuid.uuid4())
-    publish_jobs[publish_id] = {"status": "uploading", "result": None, "error": None}
+    publish_jobs[publish_id] = {"status": "uploading", "result": None, "error": None,
+                                "user_id": session.get("user_id")}
 
     def do_upload():
         """Runs in a thread via BackgroundTasks — does the actual multipart upload."""
@@ -5941,11 +6068,13 @@ async def thumbnail_publish(
 
 
 @app.get("/api/thumbnail/publish/status/{publish_id}")
-async def thumbnail_publish_status(publish_id: str):
-    """Poll the status of a background publish job."""
+async def thumbnail_publish_status(publish_id: str, request: Request):
+    """Poll the status of a background publish job (owner only in cloud mode)."""
     if publish_id not in publish_jobs:
         raise HTTPException(status_code=404, detail="Publish job not found")
-    return publish_jobs[publish_id]
+    record = publish_jobs[publish_id]
+    await _assert_job_owner(request, record)
+    return {k: v for k, v in record.items() if k != "user_id"}
 
 
 # @app.get("/api/gallery/clips")
@@ -6301,9 +6430,9 @@ async def gallery_html_page():
         # reusing the result in both places is what produced `&amp;amp;`.
         raw_title = v.get("title", "Untitled")
         title = html_mod.escape(raw_title)
-        video_url = v.get("video_url", "")
-        actor_url = v.get("actor_url", "")
-        video_id = v.get("video_id", "")
+        video_url = html_mod.escape(_http_url_or_empty(v.get("video_url", "")))
+        actor_url = html_mod.escape(_http_url_or_empty(v.get("actor_url", "")))
+        video_id = html_mod.escape(str(v.get("video_id", "")))
         duration = v.get("duration", 0)
         mode = v.get("video_mode", "")
         product = html_mod.escape(v.get("product_name", ""))
@@ -6382,6 +6511,12 @@ h1{{font-size:28px;font-weight:700;padding:40px 20px 0;text-align:center}}
 </body></html>'''
 
 
+def _http_url_or_empty(value) -> str:
+    """``value`` if it is an http(s) URL, else "" (no javascript:/data:)."""
+    value = str(value or "").strip()
+    return value if re.match(r"(?i)^https?://", value) else ""
+
+
 @app.get("/video/{video_id}", response_class=HTMLResponse)
 async def video_html_page(video_id: str):
     """SEO individual video page with og:video meta tags."""
@@ -6399,14 +6534,20 @@ async def video_html_page(video_id: str):
     title = html_mod.escape(raw_title)
     caption = html_mod.escape(raw_caption)
     narration = html_mod.escape(meta.get("full_narration", ""))
-    video_url = meta.get("video_url", "")
-    actor_url = meta.get("actor_url", "")
+    # Everything below lands in markup, generated from user input (product
+    # page scrape, Gemini output): escape it all, and only let http(s) URLs
+    # into src/href/content so a javascript: URL cannot ride along either.
+    raw_video_url = _http_url_or_empty(meta.get("video_url", ""))
+    raw_actor_url = _http_url_or_empty(meta.get("actor_url", ""))
+    video_url = html_mod.escape(raw_video_url)
+    actor_url = html_mod.escape(raw_actor_url)
     duration = meta.get("duration", 0)
     mode = meta.get("video_mode", "")
     product = html_mod.escape(meta.get("product_name", ""))
-    product_url = html_mod.escape(meta.get("product_url", ""))
-    language = meta.get("language", "en")
-    hashtags = " ".join(meta.get("hashtags", []))
+    product_url = html_mod.escape(_http_url_or_empty(meta.get("product_url", "")))
+    raw_language = str(meta.get("language", "en") or "en")
+    language = raw_language if re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", raw_language) else "en"
+    hashtags = html_mod.escape(" ".join(str(h) for h in (meta.get("hashtags") or [])))
     cost = meta.get("cost_estimate", {}).get("total", 0)
     created = meta.get("created_at", "")
     actor_desc = html_mod.escape(meta.get("actor_description", ""))
@@ -6417,8 +6558,8 @@ async def video_html_page(video_id: str):
             "@type": "VideoObject",
             "name": raw_title,
             "description": raw_caption,
-            "thumbnailUrl": actor_url,
-            "contentUrl": video_url,
+            "thumbnailUrl": raw_actor_url,
+            "contentUrl": raw_video_url,
             "uploadDate": created,
             "duration": f"PT{int(duration)}S",
             "width": 1080,

@@ -724,7 +724,7 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True):
     return plan
 
 
-def cap_source_duration(input_video, max_minutes):
+def cap_source_duration(input_video, max_minutes, safety=False):
     """Cut ``input_video`` down to its first ``max_minutes`` minutes, in place.
 
     Set through ``MAX_SOURCE_MINUTES`` by app.py when the user accepted the
@@ -738,6 +738,13 @@ def cap_source_duration(input_video, max_minutes):
     Stream copy first (seconds, no quality loss; the cut lands on a packet
     boundary a fraction of a second past N). If the container refuses a copy
     the fallback re-encodes, which is slow but rare.
+
+    ``safety=True`` is the whole-video case (``SOURCE_CAP_MINUTES``): the
+    reservation covered the duration the metering probe saw, rounded up, and
+    the cut only exists for a download that turns out clearly longer than
+    that (a server answering the probe and the download differently). So it
+    never cuts a file whose duration it cannot read, and it ignores anything
+    within 30 s of the cap.
     """
     try:
         secs = float(max_minutes) * 60.0
@@ -753,7 +760,9 @@ def cap_source_duration(input_video, max_minutes):
         cap.release()
     except Exception:
         duration = 0.0
-    if duration and duration <= secs + 1.0:
+    if duration and duration <= secs + (30.0 if safety else 1.0):
+        return input_video
+    if safety and not duration:
         return input_video
     root, ext = os.path.splitext(input_video)
     tmp = f"{root}.capped{ext or '.mp4'}"
@@ -768,8 +777,13 @@ def cap_source_duration(input_video, max_minutes):
             subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
             os.replace(tmp, input_video)
             shown = f"{int(math.ceil(duration / 60))}" if duration else "?"
-            print(f"✂️ Clipping the first {float(max_minutes):g} min of {shown}: "
-                  f"that is what the plan's remaining minutes cover.")
+            if safety:
+                print(f"✂️ The downloaded source runs {shown} min, longer than the "
+                      f"{float(max_minutes):g} min measured and reserved at submit; "
+                      f"clipping the first {float(max_minutes):g} min.")
+            else:
+                print(f"✂️ Clipping the first {float(max_minutes):g} min of {shown}: "
+                      f"that is what the plan's remaining minutes cover.")
             return input_video
         except Exception as e:
             try:
@@ -2024,6 +2038,10 @@ if __name__ == '__main__':
     # cap_source_duration). Must run before anything reads the file.
     if os.environ.get("MAX_SOURCE_MINUTES", "").strip():
         input_video = cap_source_duration(input_video, os.environ["MAX_SOURCE_MINUTES"])
+    elif os.environ.get("SOURCE_CAP_MINUTES", "").strip():
+        # Whole-video metered job: never process more than was reserved.
+        input_video = cap_source_duration(input_video, os.environ["SOURCE_CAP_MINUTES"],
+                                          safety=True)
 
     # Layout choice is per SOURCE video, not per clip: one upload and one call
     # instead of one per clip, and the answer is a property of the material

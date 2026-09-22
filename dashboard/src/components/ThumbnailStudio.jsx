@@ -410,7 +410,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       await new Promise((resolve, reject) => {
         const interval = setInterval(async () => {
           try {
-            const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish/status/${publish_id}`));
+            const statusRes = await apiFetch(`/api/thumbnail/publish/status/${publish_id}`);
             if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
             const statusData = await statusRes.json();
 
