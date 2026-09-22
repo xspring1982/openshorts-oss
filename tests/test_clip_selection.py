@@ -7,6 +7,8 @@ from clip_selection import (
     build_transcript_windows,
     clip_count_targets,
     dedupe_overlapping,
+    score_batches,
+    shortlist_target,
     snap_clip_to_words,
     compact_words,
     lookup_model_prices,
@@ -244,3 +246,60 @@ class TestDedupeOverlapping:
     def test_disjoint_untouched(self):
         clips = [self._clip(0, 30, 50), self._clip(30, 60, 60), self._clip(100, 130, 40)]
         assert dedupe_overlapping(clips) == clips
+
+
+class TestScoreBatches:
+    """The scoring pass must be able to fill the shortlist it is aiming for.
+
+    Regression for 22-sep-2026: a 9:10 source built 9 windows, was batched
+    8 + 1 against a prompt capped at "up to 3 windows", and shortlisted 4 of
+    a target of 8 — which halved the clip floor downstream.
+    """
+
+    @staticmethod
+    def _windows(n):
+        return [{"id": f"w{i}", "start": i * 60, "end": i * 60 + 90, "text": "t"}
+                for i in range(n)]
+
+    def test_every_window_is_scored_exactly_once_and_in_order(self):
+        # The shortlist is the global top N of the scores, so a window that
+        # never reaches the model can never be picked.
+        for n in (1, 2, 7, 8, 9, 17, 38):
+            batches = score_batches(self._windows(n), 8)
+            seen = [w["id"] for batch in batches for w in batch]
+            assert seen == [w["id"] for w in self._windows(n)]
+
+    def test_the_nine_window_case_has_no_tail_of_one(self):
+        # The measured job split 9 into 8 + 1, and a batch of 1 cannot be
+        # filtered: window_009 entered the shortlist by arithmetic.
+        assert [len(b) for b in score_batches(self._windows(9), 8)] == [5, 4]
+
+    def test_batches_are_near_equal_and_within_the_size_limit(self):
+        for n in (9, 16, 17, 38, 100):
+            sizes = [len(b) for b in score_batches(self._windows(n), 8)]
+            assert max(sizes) <= 8
+            assert max(sizes) - min(sizes) <= 1
+            assert sum(sizes) == n
+
+    def test_batch_count_is_never_worse_than_the_naive_walk(self):
+        # Balancing must not cost extra Gemini calls.
+        for n in range(1, 60):
+            naive = -(-n // 8)
+            assert len(score_batches(self._windows(n), 8)) == naive
+
+    def test_degenerate_input_does_not_crash(self):
+        assert score_batches([], 8) == []
+        assert score_batches(None, 8) == []
+        assert [len(b) for b in score_batches(self._windows(2), 0)] == [1, 1]
+
+
+class TestShortlistTarget:
+    def test_scales_with_duration_and_is_capped(self):
+        assert shortlist_target(60) == 3          # floor
+        assert shortlist_target(9 * 60) == 8      # the measured job
+        assert shortlist_target(60 * 60) == 10    # ceiling
+        assert shortlist_target(3 * 60 * 60) == 10
+
+    def test_degenerate_input_does_not_crash(self):
+        assert shortlist_target(None) == 3
+        assert shortlist_target("nonsense") == 3

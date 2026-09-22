@@ -67,6 +67,68 @@ def clip_count_targets(n_windows):
     return low, max(low, high)
 
 
+def shortlist_target(video_duration):
+    """How many scored windows the detail pass should get.
+
+    Scales with duration so a long video surfaces more candidates without
+    exploding the detail call, floored at 3 so a short one still gets a
+    choice. ``score_batches`` exists to make this number reachable.
+    """
+    try:
+        seconds = float(video_duration or 0)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return max(3, min(10, int(seconds // 90) + 2))
+
+
+def score_batches(windows, batch_size):
+    """Split ``windows`` into near-equal scoring batches.
+
+    Two things were wrong with the old ``range(0, n, batch_size)`` walk plus a
+    prompt that said "choose up to 3 windows from this batch".
+
+    The cap made the shortlist unreachable. Its real ceiling was
+    ``3 * n_batches``, not ``shortlist_target``: measured 22-sep-2026 on a
+    9:10 source, 9 windows batched 8 + 1 returned 3 + 1 = 4 windows against a
+    target of 8. ``clip_count_targets`` then derives the clip floor from that
+    halved shortlist, so the detail pass was asked for 4-8 clips instead of
+    6-12 and the job delivered 4 (3 in prod on the same video). Every source
+    under ~30 minutes was starved the same way, which is the mechanism behind
+    "95% of jobs deliver 3 clips or fewer" — the clip count the retention
+    curve hangs on (see clip_count_targets). The prompt now scores every
+    window it is given and the shortlist is the global top ``target``, so the
+    selection happens where the scores can actually be compared.
+
+    Per-batch selection also threw away the ranking it was computing: a batch
+    holding five great moments could only contribute three, while a batch of
+    filler still contributed its own three.
+
+    The remainder was its own bug: a trailing batch of one window came back
+    with that window whatever its score, because a cap of 3 cannot filter a
+    batch of 1 — the tail of the video entered the shortlist by arithmetic
+    rather than merit (``window_009`` did exactly that on the measured run).
+    Near-equal batches keep that from happening and also keep each score
+    comparable, since a window judged alone is judged against nothing.
+    """
+    windows = list(windows or [])
+    n = len(windows)
+    if not n:
+        return []
+    size = max(1, int(batch_size or 1))
+    n_batches = max(1, -(-n // size))       # ceil
+    base, extra = divmod(n, n_batches)
+
+    out = []
+    start = 0
+    for index in range(n_batches):
+        take = base + (1 if index < extra else 0)
+        batch = windows[start:start + take]
+        start += take
+        if batch:
+            out.append(batch)
+    return out
+
+
 def trim_to_best(shorts, max_clips):
     """Cut an over-long detail-pass result down to ``max_clips`` BY SCORE.
 

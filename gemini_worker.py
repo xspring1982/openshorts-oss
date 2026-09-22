@@ -249,19 +249,22 @@ def _log(message: str) -> None:
 
 SCORE_PROMPT_TEMPLATE = """
 You are a senior short-form video strategist.
-Select the MOST viral candidate windows from this batch.
+RANK these candidate windows by how well each would work as a standalone short.
 
 Rules:
 - Return only valid JSON.
-- Choose up to 3 windows from this batch.
-- `score` must be an integer from 0 to 100.
+- Score EVERY window in this batch: exactly one entry per input window, with
+  the id you were given. Do not drop the weak ones — say they are weak.
+- `score` must be an integer from 0 to 100, and the ranking is what matters:
+  use the whole range instead of clustering. Most windows of a normal video
+  are not clippable, so reserve 70+ for the ones that pass the test below,
+  and put weak filler, housekeeping, outros, rambling transitions and
+  low-signal padding under 30 even when the topic is interesting.
 - THE 2-SECOND TEST is the main criterion: would the first 2 seconds of this
   moment force a cold viewer (no context) to keep watching? Windows that only
   work with prior context score low.
 - Prefer windows with strong hooks, conflict, surprise, outrage, emotion,
   novelty, big numbers, or a clear payoff.
-- Ignore weak filler, housekeeping, outros, rambling transitions, and
-  low-signal padding unless there is an obvious hook or payoff.
 
 TRANSCRIPT_LANGUAGE: {language}
 VIDEO_DURATION_SECONDS: {video_duration}
@@ -596,7 +599,7 @@ def main() -> int:
     if args.mode != "score":
         # Score mode receives every window, not a shortlist, so a count target
         # derived from it would be meaningless — and the score template has no
-        # placeholder for one anyway.
+        # placeholder for one: it ranks whatever it is given.
         fmt["min_clips"], fmt["max_clips"] = clip_count_targets(len(payload.get("windows") or []))
         fmt["min_secs"], fmt["max_secs"] = clip_duration_bounds()
     prompt = template.format(**fmt)

@@ -28,6 +28,7 @@ import layout_picker
 import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
+                            score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
@@ -1728,6 +1729,13 @@ def get_viral_clips(transcript_result, video_duration):
         # 4096 unless OLLAMA_CONTEXT_LENGTH says otherwise) and 8 windows of
         # transcript do not fit; a silently truncated prompt scores garbage.
         SCORE_BATCH = score_batch_size()
+        # The batches only split the work: the prompt scores every window it
+        # is given and the shortlist below is the global top `target`. Letting
+        # each batch SELECT instead (the old "up to 3 per batch") capped the
+        # shortlist at 3 * n_batches, under the target for any source shorter
+        # than ~30 min. See clip_selection.score_batches.
+        target = shortlist_target(video_duration)
+
         def _payload(ws):
             return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
 
@@ -1736,15 +1744,14 @@ def get_viral_clips(transcript_result, video_duration):
                 video_duration=video_duration, language=language,
                 windows_json=json.dumps(_payload(ws), ensure_ascii=False))
 
-        for b in range(0, len(windows), SCORE_BATCH):
+        for batch in score_batches(windows, SCORE_BATCH):
             scored.extend(_run_stage_split(
-                client, model_name, windows[b:b + SCORE_BATCH], _score_prompt,
+                client, model_name, batch, _score_prompt,
                 gemini_worker.ScoreResponse, "windows", costs, "score"))
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
         scored.sort(key=lambda w: w.get("score", 0), reverse=True)
-        target = max(3, min(10, int(video_duration // 90) + 2))
         by_id = {w["id"]: w for w in windows}
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
@@ -1754,17 +1761,43 @@ def get_viral_clips(transcript_result, video_duration):
         # --- Pass 2: detailed clip extraction on the shortlist ---
         min_clips, max_clips = clip_count_targets(len(shortlist))
 
-        def _detail_prompt(ws):
+        def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
             # still hold the best clips, and the model returns fewer anyway.
-            return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
-                video_duration=video_duration, language=language,
-                min_clips=min_clips, max_clips=max_clips,
-                min_secs=min_secs, max_secs=max_secs,
-                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+            def build(ws):
+                return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
+                    video_duration=video_duration, language=language,
+                    min_clips=lo, max_clips=hi,
+                    min_secs=min_secs, max_secs=max_secs,
+                    windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+            return build
 
-        shorts = _run_stage_split(client, model_name, shortlist, _detail_prompt,
+        shorts = _run_stage_split(client, model_name, shortlist,
+                                  _detail_prompt_for(min_clips, max_clips),
                                   gemini_worker.DetailResponse, "shorts", costs, "detail")
+
+        # The floor lived only in the prompt, and a prompt is not a contract:
+        # the model regularly returned half of it and the job shipped that.
+        # The windows it passed over are the cheap second chance — they are
+        # already the best-scoring ones in the video — so they get one more
+        # call for the missing clips. It may still come back empty, which is
+        # the honest answer for material that does not hold more.
+        if len(shorts) < min_clips:
+            used = {str(s.get("source_window_id") or "") for s in shorts}
+            spare = [w for w in shortlist if w["id"] not in used]
+            if spare:
+                missing = min_clips - len(shorts)
+                print(f"   Detail returned {len(shorts)} clip(s) of {min_clips}; "
+                      f"asking the {len(spare)} unused window(s) for {missing} more.")
+                extra = _run_stage_split(
+                    client, model_name, spare,
+                    _detail_prompt_for(missing, max(missing, len(spare))),
+                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                if extra:
+                    shorts = sorted(shorts + extra,
+                                    key=lambda s: float(s.get("start") or 0))
+                    print(f"   Recovered {len(extra)} clip(s) from them.")
+
         if len(shorts) > max_clips:
             # By score, never by position: the results arrive in transcript
             # order, so slicing kept the earliest clips and silently dropped

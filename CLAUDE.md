@@ -157,6 +157,43 @@ otherwise process 45 minutes on a 20-minute reservation. `/api/status` and
 the process response carry `partial`, and the results view says which part
 of the video the clips came from, with the upsell for the rest.
 
+### How many clips a job returns (`clip_selection.py`)
+
+The count is not a setting, it is derived, and every stage of the derivation
+used to leak. `get_viral_clips` builds ~90s scoring windows over the
+transcript, scores them in batches, shortlists the best `shortlist_target`
+(`min(10, duration//90 + 2)`, floor 3) and asks the detail pass for
+`clip_count_targets(len(shortlist))` clips — a floor that matters because
+users who got 1-3 clips came back a second day 0.4% of the time against
+16.1% for 4-9.
+
+Two things broke that chain, both found on a 9:10 source on 22-sep-2026 that
+delivered 3 clips in prod:
+
+- **The scoring pass selected instead of ranking.** Its prompt said "choose up
+  to 3 windows from this batch", so the shortlist ceiling was
+  `3 * n_batches`, not the target: 9 windows batched 8 + 1 gave 3 + 1 = 4
+  against a target of 8, and `clip_count_targets` then asked for 4-8 clips
+  instead of 6-12. Every source under ~30 min was starved this way — this is
+  the mechanism behind "95% of jobs deliver 3 clips or fewer". It also threw
+  away the ranking it was computing, since a batch of five great moments
+  could still only contribute three. The prompt now scores **every** window
+  and the shortlist is the global top N. Batches are near-equal
+  (`score_batches`) for the same reason the cap is gone: a trailing batch of
+  one window returned that window whatever its score, so the tail of the
+  video entered the shortlist by arithmetic.
+- **The clip floor was only a sentence in the prompt.** Nothing in code
+  checked it, so a detail pass that returned half was shipped as-is. When it
+  comes back under `min_clips`, the shortlist windows that produced nothing
+  get one more call for the difference. An empty answer is accepted: that is
+  material that genuinely holds no more, and padding is worse than a short
+  list.
+
+Measured on that source, same transcript, three runs: shortlist 4 → 8 and
+4 clips → 6, at the same cost (~$0.005, 3 calls). `target_clips` on
+`/api/process` (dashboard: advanced options) still pins both ends via
+`CLIP_TARGET_MIN`/`MAX` when the user wants an exact number.
+
 ### Silent footage: the vision fallback (`main.get_visual_clips`)
 
 The moment picker reads the transcript, so a video with nothing said in it
