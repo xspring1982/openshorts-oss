@@ -256,17 +256,38 @@ _parakeet_model = None
 _parakeet_lock = threading.Lock()
 
 
+# How many VAD segments (up to 20 s each) the encoder takes per batch. The
+# library default is 8; 4 cuts the peak VRAM of a transcription from ~6.1 to
+# ~4.6 GB for the same words. Benchmarked in prod on 22-sep-2026 over 10 real
+# user videos (40 min of audio, EN/ES/PT/FR-AR, 4,850 words): batch 4 changed
+# 1 word outside the mixed-language clip (which goes to whisper in prod anyway),
+# 0.1 ms mean timestamp drift, +3 s per 20-min video. Batch 2 saved another
+# 0.5 GB but dropped a whole sentence; int8 was 11x slower on this GPU with
+# 11.7% of words different. Don't go below 4 without re-running that check.
+PARAKEET_VAD_BATCH = int(os.environ.get("PARAKEET_VAD_BATCH", "4"))
+
+
+def parakeet_providers():
+    """onnxruntime providers for Parakeet. The arena grows only by what is
+    asked and cuDNN gets no oversized workspace: same numerics (identical
+    transcripts in the benchmark), less memory held."""
+    cuda_opts = {
+        "arena_extend_strategy": "kSameAsRequested",
+        "cudnn_conv_use_max_workspace": "0",
+        "cudnn_conv_algo_search": "HEURISTIC",
+    }
+    return [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
+
+
 def _get_parakeet_model():
     global _parakeet_model
     with _parakeet_lock:
         if _parakeet_model is None:
             import onnx_asr
-            model = onnx_asr.load_model(
-                PARAKEET_MODEL_ID,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-            )
+            model = onnx_asr.load_model(PARAKEET_MODEL_ID, providers=parakeet_providers())
             vad = onnx_asr.load_vad("silero")
-            _parakeet_model = model.with_vad(vad).with_timestamps()
+            _parakeet_model = model.with_vad(
+                vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()
     return _parakeet_model
 
 

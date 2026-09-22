@@ -333,3 +333,16 @@ class TestHostAsrSlot:
         import transcribe_backends as tb
         with tb.host_asr_slot(slots=0, lock_dir=str(tmp_path)) as s:
             assert s._fh is None
+
+
+class TestParakeetMemorySettings:
+    def test_vad_batch_default_is_the_benchmarked_one(self):
+        import transcribe_backends as tb
+        assert tb.PARAKEET_VAD_BATCH == 4
+
+    def test_cuda_provider_is_lean_with_cpu_fallback(self):
+        import transcribe_backends as tb
+        (name, opts), cpu = tb.parakeet_providers()
+        assert name == "CUDAExecutionProvider" and cpu == "CPUExecutionProvider"
+        assert opts["arena_extend_strategy"] == "kSameAsRequested"
+        assert opts["cudnn_conv_use_max_workspace"] == "0"

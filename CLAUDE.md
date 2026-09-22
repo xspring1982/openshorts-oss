@@ -488,6 +488,13 @@ per hour at peak with `MAX_CONCURRENT_JOBS=8`):
   (`main.transcribe_video` → `release_models()`). Before, a job kept Parakeet's
   onnxruntime CUDA arena (~4-6 GB) for its whole render; TransNetV2 also
   `empty_cache()`s after each pass.
+- **Parakeet runs lean** (`transcribe_backends.parakeet_providers`,
+  `PARAKEET_VAD_BATCH`=4): 4 VAD segments per encoder batch instead of 8, CUDA
+  arena `kSameAsRequested`, no max cuDNN workspace. Peak per transcription
+  6.1 → 4.6 GB with the same words (benchmark 22-sep-2026: 10 real videos,
+  4,850 words, 1 word changed outside a clip that goes to whisper anyway).
+  Batch 2 dropped a sentence and int8 was 11x slower with 11.7% of words
+  different: both rejected.
 - **Host-wide transcription slots** (`transcribe_backends.host_asr_slot`,
   `ASR_HOST_SLOTS`, default 2): flock files `output/.asr-gpu-N.lock`, shared by
   every job process and by both containers of a deploy.
