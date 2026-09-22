@@ -827,22 +827,68 @@ def _jobs_busy_elsewhere(now=None) -> int:
 
 SHARED_GPU_WAIT_SECONDS = 5
 SHARED_GPU_MAX_WAIT = DRAIN_TIMEOUT_SECONDS + 120
+# Free VRAM a new job needs before it starts. A job peaks at ~4-6 GB while it
+# transcribes; starting one on a nearly full card is what made NVENC and
+# TransNetV2 of the jobs already running fail with CUDA OOM. 0 disables.
+GPU_MIN_FREE_MB = int(os.environ.get("GPU_MIN_FREE_MB", "4500"))
+_gpu_free_cache = {"at": 0.0, "mb": None}
+
+
+def _gpu_free_mb():
+    """Free memory on GPU 0 in MiB, or None when there is no nvidia-smi (CPU
+    host, self-host without a GPU): then only the job count limits."""
+    now = time.monotonic()
+    if now - _gpu_free_cache["at"] < 2:
+        return _gpu_free_cache["mb"]
+    mb = None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits",
+             "-i", "0"], capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and out.stdout.strip():
+            mb = int(float(out.stdout.strip().splitlines()[0]))
+    except Exception:
+        mb = None
+    _gpu_free_cache.update(at=now, mb=mb)
+    return mb
+
+
+def gpu_has_room(running_here: int, busy_elsewhere: int, free_mb) -> bool:
+    """Whether a new job may start now.
+
+    The job count covers both instances during a deploy handover. The free
+    VRAM check covers what the count cannot see: jobs differ by an order of
+    magnitude in memory. With nothing running anywhere the job always starts,
+    so a card held by something outside our control can never stall the queue.
+    """
+    total = running_here + busy_elsewhere
+    if total >= MAX_CONCURRENT_JOBS:
+        return False
+    if total == 0 or GPU_MIN_FREE_MB <= 0 or free_mb is None:
+        return True
+    return free_mb >= GPU_MIN_FREE_MB
 
 
 async def _wait_for_shared_gpu():
-    """Hold a new job while this instance's jobs plus the ones another
-    instance is still draining already fill MAX_CONCURRENT_JOBS. Bounded: a
-    killed instance stops heartbeating within HEARTBEAT_STALE_AFTER anyway,
-    and the drain itself cannot outlive DRAIN_TIMEOUT_SECONDS."""
+    """Hold a new job until the GPU has room for it: this instance's jobs
+    plus the ones another instance is still draining must fit
+    MAX_CONCURRENT_JOBS, and the card must have GPU_MIN_FREE_MB free.
+    Bounded: a killed instance stops heartbeating within
+    HEARTBEAT_STALE_AFTER, a drain cannot outlive DRAIN_TIMEOUT_SECONDS, and
+    past SHARED_GPU_MAX_WAIT the job starts anyway rather than wait forever."""
     waited = 0.0
     logged = False
+    loop = asyncio.get_event_loop()
     while waited < SHARED_GPU_MAX_WAIT:
         elsewhere = _jobs_busy_elsewhere()
-        if len(_running_jobs) + elsewhere < MAX_CONCURRENT_JOBS:
+        free_mb = await loop.run_in_executor(None, _gpu_free_mb)
+        if gpu_has_room(len(_running_jobs), elsewhere, free_mb):
             return
         if not logged:
-            print(f"⏳ GPU shared with a draining instance ({elsewhere} job(s) there, "
-                  f"{len(_running_jobs)} here): holding the next job.")
+            print(f"⏳ Holding the next job: {len(_running_jobs)} running here, "
+                  f"{elsewhere} on a draining instance, "
+                  f"{free_mb if free_mb is not None else '?'} MiB GPU free "
+                  f"(needs {GPU_MIN_FREE_MB}).")
             logged = True
         await asyncio.sleep(SHARED_GPU_WAIT_SECONDS)
         waited += SHARED_GPU_WAIT_SECONDS

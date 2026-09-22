@@ -445,6 +445,20 @@ in-process and the ASR singletons then lived in uvicorn for good, so both
 now call `transcribe_backends.release_models()` when they are done. Size
 `MAX_CONCURRENT_JOBS` against the free VRAM, not the core count.
 
+Three guards keep the card from filling (22-sep-2026: 30-60% of jobs failing
+per hour at peak with `MAX_CONCURRENT_JOBS=8`):
+- **Job processes release the ASR model after transcribing**
+  (`main.transcribe_video` → `release_models()`). Before, a job kept Parakeet's
+  onnxruntime CUDA arena (~4-6 GB) for its whole render; TransNetV2 also
+  `empty_cache()`s after each pass.
+- **Host-wide transcription slots** (`transcribe_backends.host_asr_slot`,
+  `ASR_HOST_SLOTS`, default 2): flock files `output/.asr-gpu-N.lock`, shared by
+  every job process and by both containers of a deploy.
+- **Queue admission** (`app._wait_for_shared_gpu`): a job starts only when
+  running-here + running-on-the-draining-instance < `MAX_CONCURRENT_JOBS` and
+  `nvidia-smi` reports at least `GPU_MIN_FREE_MB` (4500) free; an idle card
+  always starts, and the wait is bounded by the drain timeout.
+
 ### Paid proxy accounting (`cloud/proxy_ledger.py`)
 
 Downloads go direct → static ISP proxies (flat rate) → DataImpulse (per GB),

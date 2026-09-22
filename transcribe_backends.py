@@ -54,6 +54,68 @@ _ASR_SLOTS = int(os.environ.get("ASR_GPU_CONCURRENCY", "1"))
 _ASR_GATE = threading.Semaphore(_ASR_SLOTS)
 
 
+# Host-wide cap on GPU transcriptions, across job processes AND across the two
+# containers of a deploy handover (the lock files live on the shared output/
+# volume). _ASR_GATE above only serialises threads inside one process; every
+# main.py job is its own process, so eight jobs could all load Parakeet at
+# once. Peak per transcription is ~4-6 GB on a 20 GB card (prod, 22-sep-2026).
+ASR_HOST_SLOTS = int(os.environ.get("ASR_HOST_SLOTS", "2"))
+ASR_LOCK_DIR = os.environ.get("ASR_LOCK_DIR", "output")
+
+
+class host_asr_slot:
+    """``with host_asr_slot():`` holds one of ASR_HOST_SLOTS flock slots.
+
+    Blocks (polling once a second) until a slot is free. A crashed holder
+    releases its lock with its file descriptor, so a slot can never leak.
+    Degrades to a no-op where flock or the directory is unavailable.
+    """
+
+    def __init__(self, slots=None, lock_dir=None, poll=1.0):
+        self.slots = ASR_HOST_SLOTS if slots is None else slots
+        self.lock_dir = lock_dir or ASR_LOCK_DIR
+        self.poll = poll
+        self._fh = None
+
+    def __enter__(self):
+        if self.slots <= 0:
+            return self
+        try:
+            import fcntl
+            os.makedirs(self.lock_dir, exist_ok=True)
+        except Exception:
+            return self
+        announced = False
+        while True:
+            for i in range(self.slots):
+                path = os.path.join(self.lock_dir, f".asr-gpu-{i}.lock")
+                try:
+                    fh = open(path, "a+")
+                except OSError:
+                    return self
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self._fh = fh
+                    return self
+                except OSError:
+                    fh.close()
+            if not announced:
+                print("🎙️ Waiting for a free transcription slot…", flush=True)
+                announced = True
+            time.sleep(self.poll)
+
+    def __exit__(self, *exc):
+        if self._fh is not None:
+            try:
+                import fcntl
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            self._fh.close()
+            self._fh = None
+        return False
+
+
 class _NullGate:
     def __enter__(self):
         return self

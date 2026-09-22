@@ -256,6 +256,7 @@ class TestSharedGpu:
         monkeypatch.setattr(app_module, "SHARED_GPU_WAIT_SECONDS", 0.01)
         busy = {"n": 3}
         monkeypatch.setattr(app_module, "_jobs_busy_elsewhere", lambda now=None: busy["n"])
+        monkeypatch.setattr(app_module, "_gpu_free_mb", lambda: None)
         calls = {"n": 0}
         real_sleep = asyncio.sleep
 
@@ -272,8 +273,29 @@ class TestSharedGpu:
         monkeypatch.setattr(app_module, "MAX_CONCURRENT_JOBS", 3)
         monkeypatch.setattr(app_module, "_running_jobs", {"x", "y"})
         monkeypatch.setattr(app_module, "_jobs_busy_elsewhere", lambda now=None: 0)
+        monkeypatch.setattr(app_module, "_gpu_free_mb", lambda: 20000)
 
         async def boom(sec):
             raise AssertionError("should not wait")
         monkeypatch.setattr(app_module.asyncio, "sleep", boom)
         asyncio.run(app_module._wait_for_shared_gpu())
+
+
+class TestGpuHasRoom:
+    def test_count_limit(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "MAX_CONCURRENT_JOBS", 8)
+        assert not app_module.gpu_has_room(5, 3, 20000)
+
+    def test_needs_free_vram_when_something_runs(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "MAX_CONCURRENT_JOBS", 8)
+        monkeypatch.setattr(app_module, "GPU_MIN_FREE_MB", 4500)
+        assert not app_module.gpu_has_room(3, 0, 1200)
+        assert app_module.gpu_has_room(3, 0, 6000)
+
+    def test_idle_card_always_starts(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "GPU_MIN_FREE_MB", 4500)
+        assert app_module.gpu_has_room(0, 0, 100)
+
+    def test_no_nvidia_smi_falls_back_to_count(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "MAX_CONCURRENT_JOBS", 8)
+        assert app_module.gpu_has_room(4, 0, None)
