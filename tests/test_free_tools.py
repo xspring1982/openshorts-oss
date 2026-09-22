@@ -176,3 +176,11 @@ def test_metadata_endpoint_validates_input(monkeypatch):
     monkeypatch.setattr(ft, "_generate", lambda prompt: {"tags": ["a b", "c"]})
     r = c.post("/api/tools/youtube-metadata", json={"mode": "tags", "topic": "A video about sourdough bread at home"})
     assert r.status_code == 200 and r.json()["tags"] == ["a b", "c"]
+
+
+def test_degraded_response_is_the_route_not_the_video():
+    # anonymous answer from a throttled static: title only
+    assert ft.is_degraded({"title": "Inside the Mind", "formats": [], "duration": None})
+    # a finished 24/7 stream: no formats, but a real player response
+    assert not ft.is_degraded({"title": "lofi", "formats": [], "duration": 121601512})
+    assert not ft.is_degraded({"formats": [{"id": 1}], "duration": 844})

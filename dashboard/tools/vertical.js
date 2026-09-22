@@ -9,7 +9,7 @@
 import {
   Input, Output, Conversion, BlobSource, BufferTarget, ALL_FORMATS,
   Mp4OutputFormat, WebMOutputFormat, QUALITY_HIGH,
-  getFirstEncodableVideoCodec,
+  getFirstEncodableVideoCodec, getFirstEncodableAudioCodec,
 } from 'mediabunny'
 import { $, track, setStatus, downloadBlob, safeFilename } from './common.js'
 
@@ -138,12 +138,24 @@ async function convert() {
     }
     if (!codec) throw new Error('This browser cannot encode video on the page. Try a recent Chrome or Edge.')
 
+    // Audio: AAC in MP4 is what every platform and Safari accept. An AAC
+    // source is copied untouched (no trim below the cap, same codec); anything
+    // else is encoded to AAC when this browser can, and left to mediabunny's
+    // default (Opus) only when it cannot.
+    let audioCodec
+    if (format instanceof Mp4OutputFormat) {
+      audioCodec = (await getFirstEncodableAudioCodec(['aac'])) || undefined
+    }
+
     const output = new Output({ format, target: new BufferTarget() })
     const compose = makeComposer(W, H, fit, pos, vt.displayWidth, vt.displayHeight)
     const conversion = await Conversion.init({
       input,
       output,
-      trim: { start: 0, end },
+      // Trimming forces the audio through a re-encode, so only trim when the
+      // video is actually over the cap.
+      ...(duration > MAX_SECONDS ? { trim: { start: 0, end } } : {}),
+      ...(audioCodec ? { audio: { codec: audioCodec } } : {}),
       video: {
         codec,
         bitrate: QUALITY_HIGH,

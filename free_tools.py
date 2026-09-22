@@ -48,7 +48,7 @@ router = APIRouter()
 # --------------------------------------------------------------------------- #
 # (window seconds, max hits) per IP, plus one global cap per UTC day.
 LIMITS = {
-    "transcript": {"per_ip": [(600, 10), (86400, 60)], "global_day": 3000},
+    "transcript": {"per_ip": [(600, 10), (86400, 60)], "global_day": 1500},
     "metadata": {"per_ip": [(600, 12), (86400, 50)], "global_day": 2000},
 }
 
@@ -254,6 +254,16 @@ def parse_json3(data) -> list:
     return out
 
 
+def is_degraded(info: dict) -> bool:
+    """True for a watch page YouTube served without its player response.
+
+    Keyed on the duration, not on the formats: a finished live stream answers
+    with a duration and zero formats, and it genuinely has no captions (that
+    one used to be reported as "YouTube is blocking us").
+    """
+    return not info.get("formats") and not info.get("duration")
+
+
 class TranscriptError(Exception):
     def __init__(self, code: str, message: str, status: int):
         super().__init__(message)
@@ -357,13 +367,14 @@ def fetch_transcript(video_id: str, lang: Optional[str] = None) -> dict:
                             "duration": info.get("duration") or 0,
                             "languages": languages,
                         }
-                        if not kind and not info.get("formats"):
-                            # A degraded answer: one of the statics returned
-                            # a player response with no formats and no
-                            # captions at all for a TED talk that has 49
-                            # human tracks (23-sep-2026, twice in a row on
-                            # the same IP, the other two fine). That is the
-                            # route, not the video: try the next one.
+                        if not kind and is_degraded(info):
+                            # A degraded answer: anonymous requests from two
+                            # of the three statics got the watch page without
+                            # its player response (title, but no duration, no
+                            # formats, no captions) for a TED talk with 49
+                            # human tracks (23-sep-2026); the same routes with
+                            # the cookies answered in full. That is the route,
+                            # not the video: try the next attempt.
                             errors.append("empty player response")
                             continue
                         if not kind:
