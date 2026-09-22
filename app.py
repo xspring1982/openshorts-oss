@@ -1065,6 +1065,70 @@ def _dir_size(path: str) -> int:
     return total
 
 
+# A job dir older than JOB_RETENTION_SECONDS can still be alive: on a busy day
+# a free job waits over an hour in the queue, and a long render runs past the
+# hour too. The sweeps used to delete those by age alone, under the worker's
+# feet: no clips, and the minute reservation stayed held until the 3 h stuck
+# sweep (22-sep-2026: 21 free jobs lost that way, most of them the user's
+# first). A manifest pins its dir for at most this long, so one nobody will
+# ever resume cannot keep a directory on disk forever.
+ACTIVE_JOB_MAX_SECONDS = int(os.environ.get("ACTIVE_JOB_MAX_SECONDS", str(24 * 3600)))
+
+
+def _job_is_active(job_id, now=None) -> bool:
+    """True while a job is queued or running here, or its resume manifest says
+    it has not reached a terminal state yet (the other instance's jobs during a
+    handover included). The disk sweeps must never touch such a job."""
+    if job_id in _running_jobs:
+        return True
+    if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
+        return True
+    try:
+        age = (time.time() if now is None else now) - os.path.getmtime(_manifest_path(job_id))
+    except OSError:
+        return False
+    return age <= ACTIVE_JOB_MAX_SECONDS
+
+
+def _upload_job_id(filename: str) -> str:
+    """Source uploads are stored as ``<job_id>_<name>``."""
+    return filename.split("_", 1)[0]
+
+
+def _sweep_expired_job_dirs(now):
+    """Drop job dirs older than JOB_RETENTION_SECONDS, except live jobs."""
+    for job_id in os.listdir(OUTPUT_DIR):
+        # Not a job: the thumbnails dir backs a StaticFiles mount, so
+        # deleting it would 500 every /thumbnails request until reboot.
+        if job_id == os.path.basename(THUMBNAILS_DIR):
+            continue
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_path):
+            continue
+        try:
+            expired = now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS
+        except OSError:
+            continue
+        if not expired or _job_is_active(job_id, now):
+            continue
+        print(f"🧹 Purging old job: {job_id}")
+        shutil.rmtree(job_path, ignore_errors=True)
+        jobs.pop(job_id, None)
+
+
+def _sweep_expired_uploads(now):
+    """Drop source uploads older than JOB_RETENTION_SECONDS, except the source
+    of a job that is still queued or running."""
+    for filename in os.listdir(UPLOAD_DIR):
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        try:
+            if (now - os.path.getmtime(file_path) > JOB_RETENTION_SECONDS
+                    and not _job_is_active(_upload_job_id(filename), now)):
+                os.remove(file_path)
+        except Exception:
+            pass
+
+
 def _enforce_uploads_size_cap():
     """Delete the oldest source uploads while UPLOAD_DIR is over UPLOADS_MAX_GB.
 
@@ -1080,7 +1144,7 @@ def _enforce_uploads_size_cap():
     files = []
     for name in os.listdir(UPLOAD_DIR):
         p = os.path.join(UPLOAD_DIR, name)
-        if os.path.isfile(p):
+        if os.path.isfile(p) and not _job_is_active(_upload_job_id(name)):
             try:
                 files.append((os.path.getmtime(p), p, os.path.getsize(p)))
             except OSError:
@@ -1112,7 +1176,7 @@ def _enforce_output_size_cap():
         if job_id == thumbs:
             continue
         p = os.path.join(OUTPUT_DIR, job_id)
-        if os.path.isdir(p):
+        if os.path.isdir(p) and not _job_is_active(job_id):
             try:
                 candidates.append((os.path.getmtime(p), p, job_id))
             except OSError:
@@ -1170,18 +1234,7 @@ async def cleanup_jobs():
             
             # Simple directory cleanup based on modification time
             # Check OUTPUT_DIR
-            for job_id in os.listdir(OUTPUT_DIR):
-                # Not a job: the thumbnails dir backs a StaticFiles mount, so
-                # deleting it would 500 every /thumbnails request until reboot.
-                if job_id == os.path.basename(THUMBNAILS_DIR):
-                    continue
-                job_path = os.path.join(OUTPUT_DIR, job_id)
-                if os.path.isdir(job_path):
-                    if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
-                        print(f"🧹 Purging old job: {job_id}")
-                        shutil.rmtree(job_path, ignore_errors=True)
-                        if job_id in jobs:
-                            del jobs[job_id]
+            _sweep_expired_job_dirs(now)
 
             for job_id in _sweep_retained_sources(now):
                 print(f"🧹 Dropped retained source for job {job_id}")
@@ -1214,12 +1267,7 @@ async def cleanup_jobs():
                 print(f"🧹 Expired agent upload slot {uid}")
 
             # Cleanup Uploads
-            for filename in os.listdir(UPLOAD_DIR):
-                file_path = os.path.join(UPLOAD_DIR, filename)
-                try:
-                    if now - os.path.getmtime(file_path) > JOB_RETENTION_SECONDS:
-                         os.remove(file_path)
-                except Exception: pass
+            _sweep_expired_uploads(now)
 
         except Exception as e:
             print(f"⚠️ Cleanup error: {e}")
@@ -1306,8 +1354,11 @@ async def _track_proxy_usage(job_id):
 
 async def run_job_wrapper(job_id):
     """Wrapper to run job and release semaphore"""
+    # Keep the record itself: run_job writes its status into this same dict,
+    # and if the entry is dropped from ``jobs`` mid-run the reservation must
+    # still be settled (released) instead of staying held for hours.
+    job = jobs.get(job_id)
     try:
-        job = jobs.get(job_id)
         if job:
             await run_job(job_id, job)
     except Exception as e:
@@ -1319,7 +1370,7 @@ async def run_job_wrapper(job_id):
         _clear_resume_manifest(job_id)
         # Settle the minute reservation (managed jobs only): commit on success,
         # release otherwise so the minutes go back to the user.
-        await _settle_reservation(job_id)
+        await _settle_reservation(job_id, job)
         # Archive the completed clips to the user's durable R2 library (history).
         await _archive_managed_job(job_id)
         # Fire the caller's webhook (after archive, so durable links exist).
@@ -1627,10 +1678,10 @@ async def _notify_job_webhook(job_id):
     asyncio.create_task(_deliver_webhook(url, body, job.get('webhook_secret')))
 
 
-async def _settle_reservation(job_id):
+async def _settle_reservation(job_id, job=None):
     if not BILLING_ENABLED:
         return
-    job = jobs.get(job_id) or {}
+    job = job if job is not None else (jobs.get(job_id) or {})
     reservation_id = job.get('reservation_id')
     if not reservation_id:
         return
