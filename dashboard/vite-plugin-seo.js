@@ -139,8 +139,17 @@ export default function seoPlugin() {
       )
     },
 
-    generateBundle() {
+    generateBundle(_options, bundle) {
+      // Tool pages load a standalone entry (vite.config.js rollupOptions.input)
+      // whose file name carries a content hash; look it up here.
+      const entries = {}
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type === 'chunk' && chunk.isEntry) entries[chunk.name] = `/${chunk.fileName}`
+      }
       for (const page of pages) {
+        if (page.tool && !entries[page.tool.entry]) {
+          throw new Error(`[openshorts-seo] no built entry "${page.tool.entry}" for ${page.path}`)
+        }
         this.emitFile({
           type: 'asset',
           // Flat .html, not a directory with an index. nginx's `try_files $uri/`
@@ -149,7 +158,12 @@ export default function seoPlugin() {
           // `try_files $uri.html` (added to nginx.conf) serves these at the
           // clean path with a 200 and no redirect.
           fileName: `${page.path.replace(/^\//, '')}.html`,
-          source: substituteAnalyticsEnv(renderPage(page, relatedFor(page, pages)), env),
+          source: substituteAnalyticsEnv(
+            renderPage(page, relatedFor(page, pages), {
+              toolScript: page.tool ? entries[page.tool.entry] : '',
+            }),
+            env
+          ),
         })
       }
 

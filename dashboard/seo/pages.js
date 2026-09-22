@@ -15,6 +15,8 @@
 
 import { SITE, COMPETITORS, COMPARISON_ROWS, EDITIONS, PIPELINE_STEPS, CANONICAL_ANSWERS } from './data.js'
 import { esc } from './render.js'
+import { toolPages } from './tools.js'
+import { autopilotPages } from './autopilot-pages.js'
 
 const li = (items) => `<ul>${items.map((i) => `<li>${i}</li>`).join('')}</ul>`
 
@@ -152,7 +154,9 @@ const hubPage = () => ({
 do different jobs. Two of them take a long video and decide what to cut. One of
 them only styles captions on a clip you cut yourself. One is really an editor
 with an AI first pass. Choosing on price alone is how people end up paying for
-two tools that each do half the work.</p>
+two tools that each do half the work. If price is the deciding factor, start with
+what a <a href="/free-ai-clip-generator">free AI clip generator</a> actually
+includes.</p>
 
 <h2>Entry pricing side by side</h2>
 <p class="checked">Pricing checked 2026-07-27. Verify on the vendor's site before buying.</p>
@@ -195,9 +199,9 @@ ${faqBlock([
 
 const freeClipGenerator = () => ({
   path: '/free-ai-clip-generator',
-  title: 'Free AI Clip Generator With No Watermark (MIT) | OpenShorts',
+  title: 'Free AI Clip Generator & Clipper, No Watermark | OpenShorts',
   description:
-    'A genuinely free AI clip generator: MIT-licensed, self-hosted with Docker, no watermark and no cap. Hosted from $12/month if you would rather not run it.',
+    'Free AI clipper that turns long videos into 3 to 15 vertical clips with subtitles. Self-hosted: no watermark, no cap. Hosted: 20 free minutes a month.',
   h1: 'A free AI clip generator that is actually free',
   breadcrumb: [{ name: 'Free AI clip generator' }],
   cta: {
@@ -238,6 +242,18 @@ video takes about 50 seconds. Linux, macOS and Windows via WSL2 all work, and
 Docker Compose pulls Python 3.11, FFmpeg, YOLOv8, MediaPipe and faster-whisper
 for you.</p>
 
+<h2>Free AI clipper, free clipping AI, free clipping website: which one is this?</h2>
+<p>All three searches mean the same job: something that watches a long video and
+cuts the good parts into vertical clips without you paying. OpenShorts is that in
+two forms. As a <strong>free clipping website</strong>, openshorts.app clips 20
+minutes of video a month in the browser with no install and no credit card; the
+clips carry a small watermark. As a <strong>free AI clipper you run
+yourself</strong>, the same code from GitHub has no watermark and no monthly cap.
+Either way the clipping AI is the same: Gemini picks the moments, face tracking
+reframes them and the subtitles come from a word-level transcript. If you only
+need one piece of that, the <a href="/tools">free tools</a> cover transcripts
+and a 9:16 converter with no account at all.</p>
+
 <h2>Is a free clip generator good enough for real posting?</h2>
 <p>It depends on what you are comparing against. The moment detection uses the
 same class of model the paid tools use, Google Gemini 3.1 Flash-Lite, and the
@@ -271,6 +287,14 @@ ${faqBlock([
     q: 'How many clips does it generate per video?',
     a: 'Between 3 and 15, each 15 to 60 seconds long. The number depends on how much of the source actually holds up as a standalone clip rather than on a fixed quota.',
   },
+  {
+    q: 'Is there a free clipping website that needs no install?',
+    a: 'Yes. openshorts.app clips 20 minutes of video a month in the browser with no credit card. Those clips carry a watermark; paid plans from $12/month remove it.',
+  },
+  {
+    q: 'Is there a free AI clipper with no watermark?',
+    a: 'The self-hosted edition of OpenShorts: MIT licensed, run with Docker, no watermark and no usage cap. You bring your own Gemini API key.',
+  },
 ])}
 `,
   faq: [
@@ -285,6 +309,14 @@ ${faqBlock([
     {
       q: 'How many clips does it generate per video?',
       a: 'Between 3 and 15 clips, each 15 to 60 seconds long.',
+    },
+    {
+      q: 'Is there a free clipping website that needs no install?',
+      a: 'Yes. openshorts.app clips 20 minutes of video a month in the browser with no credit card. Those clips carry a watermark; paid plans from $12/month remove it.',
+    },
+    {
+      q: 'Is there a free AI clipper with no watermark?',
+      a: 'The self-hosted edition of OpenShorts: MIT licensed, run with Docker, no watermark and no usage cap.',
     },
   ],
 })
@@ -363,9 +395,9 @@ ${faqBlock([
 
 const howItWorks = () => ({
   path: '/how-openshorts-works',
-  title: 'How OpenShorts Turns a Long Video Into Clips | OpenShorts',
+  title: 'OpenShorts: How It Works, From Long Video to 9:16 Clips',
   description:
-    'The pipeline stage by stage: word-level transcription, scene detection, Gemini moment scoring, face-tracked 9:16 reframing, subtitles, dubbing and publishing.',
+    'How OpenShorts cuts one long video into 3 to 15 vertical clips: transcript, scene cuts, Gemini scoring, face-tracked reframing, subtitles. Try it free.',
   h1: 'How a long video becomes a vertical clip',
   breadcrumb: [{ name: 'How it works' }],
   tldr: [
@@ -463,7 +495,9 @@ every video you process. The free tier exists to show you the output, and the
 watermark exists so the output is not the product yet. That is not a scam, it is
 the business model, and it is why searching for a hosted tool that is free,
 unlimited and unwatermarked at the same time keeps returning nothing: the
-combination cannot pay for itself.</p>
+combination cannot pay for itself. What a
+<a href="/free-ai-clip-generator">free AI clip generator</a> can honestly offer
+is one of the three, and which one depends on the edition.</p>
 
 <h2>The structural exception: software you run yourself</h2>
 ${pricingParagraph}
@@ -565,8 +599,9 @@ ${pricingParagraph}
 
 <h2>Other open source clip generators, compared honestly</h2>
 <p class="checked">Checked 2026-08-04 on GitHub. Star counts move; positioning rarely does.</p>
-<p>OpenShorts is not the only open source project in this space, and pretending
-otherwise would not survive one GitHub search. The notable neighbours:</p>
+<p>OpenShorts is not the only open source project in this space (it is also the
+<a href="/free-ai-clip-generator">free AI clip generator</a> most of these pages
+are about), and pretending otherwise would not survive one GitHub search. The notable neighbours:</p>
 <ul>
 <li><strong>AI-Youtube-Shorts-Generator</strong>: the most-starred repo in the category, with a leaner scope built around highlight extraction and cropping.</li>
 <li><strong>supoclip</strong> and <strong>clippyme</strong>: smaller projects covering transcription-driven clipping, the latter also using Gemini for moment selection.</li>
@@ -616,9 +651,9 @@ ${sources([
  * and active-speaker cutting are capabilities the competitor pages cannot show. */
 const podcastToShorts = () => ({
   path: '/podcast-to-shorts',
-  title: 'Podcast to Shorts: Both Speakers Stay in Frame | OpenShorts',
+  title: 'Podcast to Shorts With Both Speakers in Frame | OpenShorts',
   description:
-    'Turn a podcast into vertical clips without cropping out half the conversation: OpenShorts stacks both speakers and cuts to whoever is talking. Free self-hosted.',
+    'Paste a podcast episode, get vertical clips with subtitles that keep both speakers on screen. 20 free minutes a month, or self-host it free under MIT.',
   h1: 'Turn a podcast into shorts without cropping out half the conversation',
   breadcrumb: [{ name: 'Podcast to shorts' }],
   published: '2026-08-04',
@@ -1036,9 +1071,9 @@ ${sources([
 
 const mcpAgentsPage = () => ({
   path: '/mcp',
-  title: 'Clip Video From AI Agents: MCP Server & API | OpenShorts',
+  title: 'OpenShorts MCP Server: Clip Video From Claude or ChatGPT',
   description:
-    'OpenShorts ships a built-in MCP server, so Claude, ChatGPT, Cursor or n8n can clip and publish videos for you: REST API with keys and signed webhooks.',
+    'Connect Claude, ChatGPT, Cursor or n8n with one URL and clip, subtitle and publish videos from a chat. 8 MCP tools, a REST API and signed webhooks.',
   h1: 'Clip and publish video from an AI agent',
   breadcrumb: [{ name: 'MCP server and API' }],
   cta: {
@@ -2187,6 +2222,8 @@ export function buildPages() {
     mcpAgentsPage(),
     automateShorts(),
     n8nTemplate(),
+    ...autopilotPages(),
+    ...toolPages(),
   ]
 }
 
@@ -2217,6 +2254,20 @@ export function relatedFor(page, all) {
     '/mcp': 'Drive the whole pipeline from Claude, ChatGPT or n8n.',
     '/automate-shorts-api': 'One POST in, one signed webhook out, no polling.',
     '/n8n-youtube-shorts-automation': 'The importable workflow: channel in, approved shorts out.',
+    '/auto-clip': 'Every new upload on your channel clipped on its own, with the rules.',
+    '/youtube-automation': 'Autopilot, n8n or the API: automate a real channel, not a content farm.',
+    '/tools': 'Free transcript, metadata and 9:16 tools, no sign-up.',
+    '/youtube-transcript-generator': 'Paste a link, get the transcript with timestamps, TXT or SRT.',
+    '/youtube-tag-generator': 'Tags, 10 title options or a description from a short brief.',
+    '/video-aspect-ratio-converter': '16:9 to 9:16 in your browser: blur, crop or bars.',
+  }
+  // A page can name its own neighbours (the tools link to each other, not
+  // into the comparison ring).
+  if (page.related) {
+    return page.related
+      .map((path) => all.find((p) => p.path === path))
+      .filter(Boolean)
+      .map((p) => ({ path: p.path, title: p.h1, blurb: blurb[p.path] || p.description }))
   }
   // Walk the ring starting after this page so each page links to a different
   // three. Slicing the same head every time would leave the last pages in the

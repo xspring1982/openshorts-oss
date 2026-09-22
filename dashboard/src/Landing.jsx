@@ -243,6 +243,7 @@ export default function Landing({ onLaunchApp }) {
             {billingEnabled && <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>}
             <a href="#comparison" className="hover:text-ink transition-colors">Comparison</a>
             <a href="#faq" className="hover:text-ink transition-colors">FAQ</a>
+            <a href="/tools" className="hover:text-ink transition-colors">Free tools</a>
           </div>
           <div className="flex items-center gap-3">
             <a
@@ -275,8 +276,12 @@ export default function Landing({ onLaunchApp }) {
               turn long videos into viral 9:16 shorts, or generate ugc marketing videos with ai actors. online, in the cloud, zero setup.
               also a clipping tool for ai agents: claude, chatgpt and n8n drive it over{' '}
               <a href="/mcp" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">mcp</a>,
-              or run your channel on autopilot with the{' '}
+              or run your channel on{' '}
+              <a href="/auto-clip" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">autopilot</a>{' '}
+              or with the{' '}
               <a href="/n8n-youtube-shorts-automation" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">n8n workflow</a>.
+              just want it free? start with the{' '}
+              <a href="/free-ai-clip-generator" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">free ai clip generator</a>.
             </p>
 
             {/* The hero CTA is the product itself: paste a link and land in the
@@ -774,6 +779,12 @@ export default function Landing({ onLaunchApp }) {
           <p className="font-display text-3xl md:text-5xl lowercase text-ink tracking-tight mb-10">clip it before it scrolls past.</p>
           <nav aria-label="Guides and comparisons" className="border-t border-rule pt-6 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm lowercase text-muted">
             <a href="/free-ai-clip-generator" className="hover:text-ink transition-colors">free ai clip generator</a>
+            <a href="/tools" className="hover:text-ink transition-colors">free tools</a>
+            <a href="/youtube-transcript-generator" className="hover:text-ink transition-colors">youtube transcript generator</a>
+            <a href="/youtube-tag-generator" className="hover:text-ink transition-colors">youtube tag generator</a>
+            <a href="/video-aspect-ratio-converter" className="hover:text-ink transition-colors">video to 9:16 converter</a>
+            <a href="/auto-clip" className="hover:text-ink transition-colors">auto clip</a>
+            <a href="/youtube-automation" className="hover:text-ink transition-colors">youtube automation</a>
             <a href="/free-ai-clip-generator-no-watermark" className="hover:text-ink transition-colors">no watermark</a>
             <a href="/open-source-video-clipper" className="hover:text-ink transition-colors">open source video clipper</a>
             <a href="/podcast-to-shorts" className="hover:text-ink transition-colors">podcast to shorts</a>

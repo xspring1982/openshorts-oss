@@ -1,4 +1,5 @@
 import { allows } from './consent';
+import { firstTouchProps } from './attribution';
 
 // Lightweight custom-event helper (OpenPanel).
 //
@@ -32,13 +33,23 @@ import { allows } from './consent';
 // Stripe" from "reached Stripe and abandoned"; before 2-ago-2026 the modals
 // emitted only their own *Checkout event and the difference was invisible.
 // Prices ride along as ordinary props (e.g. value_usd) for breakdowns.
+// Conversion events carry the visitor's first touch (landing page, referrer,
+// campaign). A signup happens after the Google/magic-link redirect, in a new
+// OpenPanel session whose entry page is always "/", so without these props
+// every signup looked like it came from the homepage and the SEO pages showed
+// zero conversions (7,481 of 7,481 signup_attribution rows in the 30 days to
+// 23-sep-2026 said landing_path "/").
+const FIRST_TOUCH_EVENTS = new Set(['Signup', 'CheckoutStarted', 'Subscribed']);
+
 export function track(event, options) {
   try {
     // `op` is a queueing stub until consent loads op1.js, so a call made before
     // the visitor accepted would be flushed the moment they did. Check first.
     if (!allows('analytics')) return;
     if (typeof window !== 'undefined' && typeof window.op === 'function') {
-      window.op('track', event, (options && options.props) || {});
+      const props = (options && options.props) || {};
+      window.op('track', event,
+        FIRST_TOUCH_EVENTS.has(event) ? { ...firstTouchProps(), ...props } : props);
     }
   } catch (_) {
     /* analytics must never throw into the app */

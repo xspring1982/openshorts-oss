@@ -84,6 +84,32 @@ say "OpenShorts is free" without naming the Cloud price in the same breath: both
 are true of different editions and quoting only the first one is what makes AI
 answers describe the paid product as free.
 
+### Free tools (/tools) and SEO attribution
+
+- `free_tools.py` (router always mounted): `GET /api/tools/youtube-transcript`
+  reads the captions a video **already has** on YouTube via yt-dlp (never the
+  GPU, never media). Routes: the `STATIC_PROXY_URLS` only (anonymous, then the
+  cookies), direct when there are none; **never** the per-GB `PROXY_URL`. A
+  static that answers with zero formats and zero captions is a degraded route,
+  not a "no captions" verdict (seen on one of the three statics, 23-sep-2026).
+  `POST /api/tools/youtube-metadata` = one Gemini text call (tags / titles /
+  description) with the managed key. Per-IP windows + global daily cap per tool,
+  24 h cache (also for "no captions"/"unavailable").
+- Pages: `seo/tools.js` (hub + 3 tools) and `seo/autopilot-pages.js`
+  (`/auto-clip`, `/youtube-automation`). A tool page carries `tool: {entry, html}`:
+  the form is in the static HTML, the behaviour is a Vite entry in
+  `dashboard/tools/*.js` (`vite.config.js` rollupOptions.input) that
+  `vite-plugin-seo.js` looks up by name in the bundle. The 9:16 converter runs
+  in the browser with mediabunny/WebCodecs (no upload).
+- Attribution: `seo/render.js` writes the same first-touch `os_attrib` key the
+  app writes, from the static page the visit started on. Before, every signup
+  was credited to "/" (7,481/7,481 rows, 30 days to 23-sep-2026). Signup,
+  CheckoutStarted and Subscribed carry `landing_path`/`referrer_host`/utm as
+  OpenPanel props (`lib/analytics.js`).
+- Apex→www: 301 comes from the front app's **stored Coolify custom labels**
+  (`redirectregex.permanent=true`, patched 23-sep-2026). The nginx 301 block
+  below never sees the apex while that Traefik middleware exists.
+
 ### Cómo se elige el layout
 
 `POST /api/process` acepta `layouts`: una lista (JSON) o cadena separada por

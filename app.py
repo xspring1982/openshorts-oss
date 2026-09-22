@@ -2104,6 +2104,11 @@ if BILLING_ENABLED:
 import mcp_server as _mcp_server
 app.include_router(_mcp_server.router)
 
+# Free public tools behind the /tools SEO pages: YouTube transcript (existing
+# captions only, never the GPU) and the title/description/tag generator.
+import free_tools as _free_tools
+app.include_router(_free_tools.router)
+
 # Enable CORS for frontend. Cloud mode locks this down to the configured origins;
 # self-host keeps the permissive wildcard it has always used.
 app.add_middleware(
