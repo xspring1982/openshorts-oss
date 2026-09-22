@@ -379,7 +379,7 @@ on their socials, one a day. Paid plans only (it spends minutes unattended).
   clips the back catalogue) and at most 3 days old; 1 automatic job per user
   per 24 h; `max_minutes` per video (default 30, sent as the partial-clip
   `max_minutes`); YouTube Shorts are skipped (`HEAD /shorts/<id>` answers 200
-  for a Short and 303 to `/watch` for a regular video, checked on prod IPs).
+  for a Short and 303 to `/watch` for a regular video; the SOCS consent cookie is required, from the EU servers every request is otherwise a 302 to consent.youtube.com).
 - **Dedupe across the deploy handover**: two containers poll at once during a
   rolling deploy, so a video is claimed by INSERTing its `autopilot_runs` row
   (unique `user_id, video_id`) before anything is submitted. A draining
