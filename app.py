@@ -801,6 +801,53 @@ def _manifest_busy_elsewhere(m, now=None):
             and now - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER)
 
 
+def _jobs_busy_elsewhere(now=None) -> int:
+    """How many jobs another instance is running right now (fresh heartbeat).
+
+    During a deploy the old container keeps running its jobs while it drains,
+    on the same GPU. Counting them is what stops the new container from
+    stacking its own full MAX_CONCURRENT_JOBS on top: 22-sep-2026, 7 old + 3
+    new jobs filled the 20 GB card and 5 of 12 jobs died of CUDA OOM.
+    """
+    now = time.time() if now is None else now
+    busy = 0
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        return 0
+    for name in entries:
+        path = os.path.join(OUTPUT_DIR, name, _RESUME_FILE)
+        if not os.path.exists(path):
+            continue
+        m = _read_manifest(name)
+        if m and _manifest_busy_elsewhere(m, now):
+            busy += 1
+    return busy
+
+
+SHARED_GPU_WAIT_SECONDS = 5
+SHARED_GPU_MAX_WAIT = DRAIN_TIMEOUT_SECONDS + 120
+
+
+async def _wait_for_shared_gpu():
+    """Hold a new job while this instance's jobs plus the ones another
+    instance is still draining already fill MAX_CONCURRENT_JOBS. Bounded: a
+    killed instance stops heartbeating within HEARTBEAT_STALE_AFTER anyway,
+    and the drain itself cannot outlive DRAIN_TIMEOUT_SECONDS."""
+    waited = 0.0
+    logged = False
+    while waited < SHARED_GPU_MAX_WAIT:
+        elsewhere = _jobs_busy_elsewhere()
+        if len(_running_jobs) + elsewhere < MAX_CONCURRENT_JOBS:
+            return
+        if not logged:
+            print(f"⏳ GPU shared with a draining instance ({elsewhere} job(s) there, "
+                  f"{len(_running_jobs)} here): holding the next job.")
+            logged = True
+        await asyncio.sleep(SHARED_GPU_WAIT_SECONDS)
+        waited += SHARED_GPU_WAIT_SECONDS
+
+
 def _write_instance_marker():
     try:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -1288,6 +1335,13 @@ async def process_queue():
 
             # Acquire semaphore slot (waits if max jobs are running)
             await concurrency_semaphore.acquire()
+            if _draining:
+                concurrency_semaphore.release()
+                job_queue.task_done()
+                print(f"⏸️ Draining — leaving {job_id} for the next instance.")
+                continue
+            # The old container may still be draining its jobs on this GPU.
+            await _wait_for_shared_gpu()
             if _draining:
                 concurrency_semaphore.release()
                 job_queue.task_done()
