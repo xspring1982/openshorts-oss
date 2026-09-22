@@ -1373,6 +1373,9 @@ async def run_job_wrapper(job_id):
         await _settle_reservation(job_id, job)
         # Archive the completed clips to the user's durable R2 library (history).
         await _archive_managed_job(job_id)
+        # Autopilot bookkeeping + autopublish (before the generic clips-ready
+        # email, which it replaces for its own jobs).
+        await _autopilot_job_finished(job_id, job)
         # Fire the caller's webhook (after archive, so durable links exist).
         await _notify_job_webhook(job_id)
         # Operational alerting for managed jobs (proxy out of credits / failures).
@@ -1424,6 +1427,18 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
             print(f"⚠️  R2 edit archive error for {job_id}: {e}")
 
     asyncio.create_task(_run())
+
+
+async def _autopilot_job_finished(job_id, job):
+    if not BILLING_ENABLED or not job or not job.get('user_id'):
+        return
+    try:
+        reason = None
+        if job.get('status') != 'completed':
+            reason = _alerts._classify_failure(_job_error_text(job.get('logs', [])))
+        await cloud.autopilot.on_job_finished(job_id, job, reason)
+    except Exception as e:
+        print(f"⚠️  Autopilot completion error for {job_id}: {e}")
 
 
 async def _notify_clips_ready(job_id):
@@ -1574,7 +1589,7 @@ async def _track_job_outcome(job, ok, err):
             job_index=job_index,
             clips=clips if ok else None,
             plan=job.get('user_plan'),
-            source="url" if job.get('url') else "upload",
+            source="url" if _job_source_url(job) else "upload",
             reason=(_alerts._classify_failure(err) if not ok and err else None),
         )
     except Exception as e:
@@ -1810,6 +1825,9 @@ async def lifespan(app: FastAPI):
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)
+        # Autopilot: watch connected YouTube channels for new videos. Paused
+        # while this instance drains so only the new container submits jobs.
+        cloud.autopilot.start(app, is_active=lambda: not _draining)
         # Nag on Telegram while the residential proxy is down/out of credits —
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
@@ -2669,6 +2687,8 @@ async def process_endpoint(
         'webhook_url': webhook_url,
         'webhook_secret': webhook_secret,
         'base_url': api_base,
+        # Read by the ClipsDelivered/JobFailed analytics event (plan).
+        'user_plan': user_plan,
     }
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a

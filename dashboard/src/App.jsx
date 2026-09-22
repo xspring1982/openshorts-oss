@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -22,6 +22,7 @@ import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
+import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
@@ -822,6 +823,27 @@ function App() {
     if (tutorialLock && activeTab !== 'dashboard') setActiveTab('dashboard');
   }, [tutorialLock, activeTab]);
 
+  // Deep links into a tab: #app?tab=autopilot (Autopilot emails, the social
+  // connect page's return URL). Read once per hash change, then the query is
+  // dropped so a reload does not keep forcing the tab.
+  const [autopilotConnected, setAutopilotConnected] = useState(false);
+  useEffect(() => {
+    const DEEP_LINK_TABS = ['autopilot', 'history', 'settings', 'thumbnails', 'dashboard'];
+    const apply = () => {
+      const hash = window.location.hash || '';
+      if (!hash.startsWith('#app?')) return;
+      const params = new URLSearchParams(hash.slice(5));
+      const tab = params.get('tab');
+      if (!tab || !DEEP_LINK_TABS.includes(tab)) return;  // e.g. #app?tutorial=1
+      setActiveTab(tab);
+      if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
+      try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
+    };
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, []);
+
   useEffect(() => {
     if (tutorialPhase === 'coach' && status === 'complete' && (results?.clips?.length > 0)) {
       setTutorialPhase('celebrate');
@@ -1067,12 +1089,14 @@ function App() {
   // wraps to two lines in a 5-up bar on a 360px phone.
   const navItems = [
     { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator', short: 'clips', primary: true },
-    { id: 'saasshorts', ord: '02', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
-    { id: 'ai-agent', ord: '03', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
-    { id: 'ugc-gallery', ord: '04', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
-    { id: 'thumbnails', ord: '05', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
-    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '06', icon: History, label: 'History', short: 'history' }] : []),
-    { id: 'settings', ord: '07', icon: Settings, label: 'Settings', short: 'settings' },
+    // Cloud only: it runs on the managed pipeline and the Upload-Post connection.
+    ...(billingEnabled ? [{ id: 'autopilot', ord: '02', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true }] : []),
+    { id: 'saasshorts', ord: '03', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
+    { id: 'ai-agent', ord: '04', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
+    { id: 'ugc-gallery', ord: '05', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
+    { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
+    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
+    { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -1162,7 +1186,8 @@ function App() {
               <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
               {tabLocked(item.id)
                 ? <Lock size={12} className="shrink-0 hidden lg:block" />
-                : item.byok ? <span className="readout hidden lg:block">BYOK</span> : null}
+                : item.byok ? <span className="readout hidden lg:block">BYOK</span>
+                  : item.isNew ? <span className="badge-brass hidden lg:block">new</span> : null}
               <span className="readout hidden lg:block">{item.ord}</span>
             </button>
           );
@@ -1225,7 +1250,8 @@ function App() {
                 <span className="text-[0.95rem] lowercase flex-1 text-left truncate">{item.label}</span>
                 {tabLocked(item.id)
                   ? <Lock size={12} className="shrink-0" />
-                  : item.byok ? <span className="readout shrink-0">BYOK</span> : null}
+                  : item.byok ? <span className="readout shrink-0">BYOK</span>
+                    : item.isNew ? <span className="badge-brass shrink-0">new</span> : null}
               </button>
             );
           })}
@@ -1427,7 +1453,7 @@ function App() {
             <div className="h-full overflow-y-auto p-4 sm:p-8 max-w-2xl mx-auto animate-fade">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
                 <div>
-                  <p className="eyebrow mb-1.5">07 · SETTINGS</p>
+                  <p className="eyebrow mb-1.5">08 · SETTINGS</p>
                   <h1 className="font-display lowercase text-2xl text-ink">Settings</h1>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted mt-1">
@@ -1782,6 +1808,31 @@ function App() {
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
                 <UGCGallery />
+              </div>
+            </div>
+          )}
+
+          {/* View: Autopilot */}
+          {activeTab === 'autopilot' && (
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
+                {isSignedIn ? (
+                  <AutopilotTab
+                    onOpenProject={restoreProject}
+                    onUpgrade={() => setShowPlanChoice(true)}
+                    justConnected={autopilotConnected}
+                  />
+                ) : (
+                  <div className="max-w-2xl mx-auto card p-8 text-center">
+                    <Rocket size={28} className="mx-auto mb-4 text-brass" />
+                    <h1 className="font-display lowercase text-2xl text-ink mb-2">your channel, clipped on its own</h1>
+                    <p className="text-muted text-sm mb-6">
+                      Connect your YouTube channel and every new video turns into shorts automatically.
+                      Sign in to set it up.
+                    </p>
+                    <button onClick={() => setShowLogin(true)} className="btn-primary">sign in</button>
+                  </div>
+                )}
               </div>
             </div>
           )}
