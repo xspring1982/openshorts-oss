@@ -5148,6 +5148,16 @@ class SocialPostRequest(BaseModel):
 
 import httpx
 
+
+def _post_video_blocking(url, headers, data, file_path, filename, timeout):
+    """Multipart POST of a video to Upload-Post. Blocking: call it through
+    asyncio.to_thread from a request handler, never inline."""
+    with open(file_path, "rb") as f:
+        files = {"video": (filename, f.read(), "video/mp4")}
+    with httpx.Client(timeout=timeout) as client:
+        return client.post(url, headers=headers, data=data, files=files)
+
+
 @app.post("/api/social/post")
 async def post_to_socials(req: SocialPostRequest, request: Request):
     await _ensure_job_files(req.job_id, request)
@@ -5219,21 +5229,16 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
              data_payload["youtube_description"] = final_description
              data_payload["privacyStatus"] = "public"
 
-        # Send File
-        # httpx AsyncClient requires async file reading or bytes. 
-        # Since we have MAX_FILE_SIZE_MB, reading into memory is safe-ish.
-        with open(file_path, "rb") as f:
-            file_content = f.read()
-            
-        files = {
-            "video": (filename, file_content, "video/mp4")
-        }
+        # The upload is a blocking multipart POST of the whole clip (tens of
+        # seconds for TikTok+YouTube). Run inline, it froze the event loop:
+        # 23-sep-2026 19:47:48 UTC one post stalled every request, /health
+        # included, for 42 s and the uptime monitor paged "openshorts-api
+        # down". It runs in a worker thread so the API keeps answering.
+        print(f"📡 Sending to Upload-Post for platforms: {req.platforms}")
+        response = await asyncio.to_thread(
+            _post_video_blocking, url, headers, data_payload, file_path, filename, 120.0
+        )
 
-        # Switch to synchronous Client to avoid "sync request with AsyncClient" error with multipart/files
-        with httpx.Client(timeout=120.0) as client:
-            print(f"📡 Sending to Upload-Post for platforms: {req.platforms}")
-            response = client.post(url, headers=headers, data=data_payload, files=files)
-            
         if response.status_code not in [200, 201, 202]: # Added 201
              print(f"❌ Upload-Post Error: {response.text}")
              raise HTTPException(status_code=response.status_code, detail=f"Vendor API Error: {response.text}")
@@ -6367,14 +6372,10 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
             data_payload["privacyStatus"] = "public"
 
         filename = os.path.basename(file_path)
-        with open(file_path, "rb") as f:
-            file_content = f.read()
-
-        files = {"video": (filename, file_content, "video/mp4")}
-
-        with httpx.Client(timeout=120.0) as client:
-            print(f"📡 [AI Shorts] Sending to Upload-Post: {req.platforms}")
-            response = client.post(url, headers=headers, data=data_payload, files=files)
+        print(f"📡 [AI Shorts] Sending to Upload-Post: {req.platforms}")
+        response = await asyncio.to_thread(
+            _post_video_blocking, url, headers, data_payload, file_path, filename, 120.0
+        )
 
         if response.status_code not in [200, 201, 202]:
             raise HTTPException(status_code=response.status_code, detail=f"Upload-Post Error: {response.text}")
@@ -6713,16 +6714,22 @@ async def saasshorts_generate(
             # Download from S3 public URL to job output dir
             import httpx
             from security_utils import assert_public_url
-            try:
+            actor_local = os.path.join(job_output_dir, "selected_actor.png")
+
+            def _fetch_actor():
                 # SSRF guard: block private / metadata hosts before fetching.
                 safe_actor_url = assert_public_url(req.selected_actor_url)
-                actor_local = os.path.join(job_output_dir, "selected_actor.png")
                 with httpx.Client(timeout=30.0) as client:
                     resp = client.get(safe_actor_url)
-                    if resp.status_code == 200:
-                        with open(actor_local, "wb") as f:
-                            f.write(resp.content)
-                        selected_actor_path = actor_local
+                if resp.status_code != 200:
+                    return None
+                with open(actor_local, "wb") as f:
+                    f.write(resp.content)
+                return actor_local
+
+            try:
+                # Off the event loop: DNS check + a download of up to 30 s.
+                selected_actor_path = await asyncio.to_thread(_fetch_actor)
             except Exception:
                 pass
         else:
