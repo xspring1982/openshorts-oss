@@ -238,6 +238,21 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect, onConnect }) 
 };
 
 const SESSION_KEY = 'openshorts_session';
+
+// The server's own explanation for a rejected/failed job, readable: FastAPI
+// answers {"detail": "..."} or {"detail": {"message": ...}}. Showing the raw
+// JSON (or a generic "failed") hid actionable reasons such as "this video is
+// only 30s long", and new users in the tutorial saw only "That run failed".
+const readableError = (raw) => {
+  const text = String(raw || '').trim();
+  try {
+    const body = JSON.parse(text);
+    const d = body?.detail ?? body;
+    if (typeof d === 'string' && d) return d.slice(0, 300);
+    if (d && typeof d.message === 'string') return d.message.slice(0, 300);
+  } catch (_) { /* not JSON */ }
+  return text.replace(/^Error:\s*/, '').slice(0, 300) || 'Something went wrong.';
+};
 // Matches the self-host JOB_RETENTION_SECONDS default. A restore whose job was
 // already purged server-side fails gracefully and clears the saved session.
 const SESSION_MAX_AGE = 86400000; // 24 hours
@@ -263,6 +278,8 @@ function App() {
   const [partialJob, setPartialJob] = useState(null);
   // {position, ahead, eta_seconds} while the job waits in line, else null.
   const [queueInfo, setQueueInfo] = useState(null);
+  // Why the last job could not start or failed, in plain words (or '').
+  const [jobError, setJobError] = useState('');
   // Durable R2 URLs (per clip index) for the current job — used as a fallback when
   // the ephemeral local /videos/ files have been cleaned up (e.g. after a reload).
   const [durableClips, setDurableClips] = useState({});
@@ -728,6 +745,7 @@ function App() {
           } else if (data.status === 'failed') {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
+            setJobError(readableError(errorMsg));
             setLogs(prev => [...prev, "Error: " + errorMsg]);
             clearInterval(interval);
             refreshMe();
@@ -933,6 +951,7 @@ function App() {
     // Past every gate, so this request is really running: nothing left to resume.
     clearPendingJob();
     setStatus('processing');
+    setJobError('');
     setLogs(["Starting process..."]);
     setResults(null);
     // Studio handovers have no local media object; the preview switches to the
@@ -1045,8 +1064,10 @@ function App() {
         }
         return;
       }
+      const reason = readableError(e.message);
+      setJobError(reason);
       setStatus('error');
-      setLogs(l => [...l, `Error starting job: ${e.message}`]);
+      setLogs(l => [...l, `Error starting job: ${reason}`]);
     }
   };
 
@@ -1084,6 +1105,7 @@ function App() {
     setNoSource(false);
     setPartialJob(null);
     setQueueInfo(null);
+    setJobError('');
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -2354,6 +2376,7 @@ function App() {
         <ClipTutorial
           phase={tutorialPhase}
           jobStatus={status}
+          errorText={jobError}
           onStart={startTutorial}
           onSkip={skipTutorial}
           onDismissCelebrate={finishTutorial}
