@@ -18,17 +18,17 @@ from security_utils import UnsafeURLError, assert_public_url
 
 
 @pytest.mark.parametrize("ip", [
-    "100.117.9.37",          # Tailscale (onepiece)
+    "100.101.1.2",          # Tailscale node
     "100.64.0.1",            # CGNAT, first address
     "100.127.255.254",       # CGNAT, last address
     "10.0.0.1", "172.16.0.1", "192.168.1.1",
     "127.0.0.1", "0.0.0.0", "169.254.169.254",
     "192.0.0.1", "198.18.0.1", "224.0.0.1", "255.255.255.255",
     "::1", "fe80::1", "fd7a:115c:a1e0::1",   # Tailscale's IPv6 ULA
-    "::ffff:100.117.9.37",   # IPv4-mapped tailnet address
+    "::ffff:100.101.1.2",   # IPv4-mapped tailnet address
     "::ffff:127.0.0.1",
-    "2002:6475:925::1",      # 6to4 wrapping 100.117.9.37
-    "64:ff9b::6475:925",     # NAT64 wrapping 100.117.9.37
+    "2002:6465:102::1",      # 6to4 wrapping 100.101.1.2
+    "64:ff9b::6465:102",     # NAT64 wrapping 100.101.1.2
 ])
 def test_non_global_addresses_are_refused(ip):
     assert security_utils._ip_is_public(ip) is False
@@ -40,9 +40,9 @@ def test_global_addresses_pass(ip):
 
 
 @pytest.mark.parametrize("url", [
-    "http://100.117.9.37/",
-    "http://100.81.170.50:8000/api/v1/applications",
-    "https://[::ffff:100.117.9.37]/",
+    "http://100.101.1.2/",
+    "http://100.90.3.4:8080/admin",
+    "https://[::ffff:100.101.1.2]/",
     "http://[fd7a:115c:a1e0::1]/",
 ])
 def test_literal_tailnet_urls_are_refused(url):
@@ -51,9 +51,9 @@ def test_literal_tailnet_urls_are_refused(url):
 
 
 def test_hostname_resolving_to_tailnet_is_refused(monkeypatch):
-    """MagicDNS names (``onepiece``) or a public name pointed at 100.x."""
+    """MagicDNS names (``db-host``) or a public name pointed at 100.x."""
     def fake_getaddrinfo(host, port, *a, **k):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("100.117.9.37", 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("100.101.1.2", 0))]
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     with pytest.raises(UnsafeURLError):
         assert_public_url("https://videos.example.com/watch.mp4")
@@ -106,7 +106,7 @@ def _run_probe(monkeypatch, capsys, url):
 
 
 def test_probe_refuses_tailnet_url_without_running_ytdlp(monkeypatch, capsys):
-    out = _run_probe(monkeypatch, capsys, "http://100.117.9.37:22/")
+    out = _run_probe(monkeypatch, capsys, "http://100.101.1.2:22/")
     assert out["max_height"] == 0 and out["duration"] == 0
     assert _FakeYDL.seen == []
 

@@ -83,8 +83,8 @@ async def _allow_url(url):
 # /api/process: URL validation, probe ordering, reservation cap
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("url", [
-    "http://100.117.9.37:22/",
-    "http://100.81.170.50:8000/api/v1/applications",
+    "http://100.101.1.2:22/",
+    "http://100.90.3.4:8080/admin",
     "http://127.0.0.1:8000/health",
     "file:///etc/passwd",
 ])
