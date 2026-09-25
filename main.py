@@ -2120,10 +2120,13 @@ if __name__ == '__main__':
         
         # Transcription (and the Gemini pick) start on the audio track while the
         # video is still downloading; see download_youtube_video(on_audio=).
-        # Not for capped sources (the cut happens on the video file), not when
-        # a checkpoint or a precomputed transcript already has the words.
+        # Not for a MAX_SOURCE_MINUTES job (the video is always cut, so the
+        # early words would cover too much), nor when a checkpoint or a
+        # precomputed transcript already has them. SOURCE_CAP_MINUTES is set on
+        # every metered job but only cuts a download clearly longer than the
+        # reservation; when it does, the early result is dropped below.
         early = {"lock": threading.Lock(), "done": threading.Event(), "started": False,
-                 "abandoned": False, "transcript": None, "clips": None}
+                 "abandoned": False, "invalid": False, "transcript": None, "clips": None}
 
         def _early_work(audio_path, audio_duration):
             try:
@@ -2152,7 +2155,6 @@ if __name__ == '__main__':
         use_early = (not args.skip_analysis and not args.transcript
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
-                     and not os.environ.get("SOURCE_CAP_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
         input_video, video_title = download_youtube_video(
             args.url, output_dir, on_audio=_on_audio if use_early else None)
@@ -2182,8 +2184,18 @@ if __name__ == '__main__':
         input_video = cap_source_duration(input_video, os.environ["MAX_SOURCE_MINUTES"])
     elif os.environ.get("SOURCE_CAP_MINUTES", "").strip():
         # Whole-video metered job: never process more than was reserved.
+        def _stamp(path):
+            try:
+                st = os.stat(path)
+                return st.st_size, st.st_mtime_ns
+            except OSError:
+                return None
+        _before = _stamp(input_video)
         input_video = cap_source_duration(input_video, os.environ["SOURCE_CAP_MINUTES"],
                                           safety=True)
+        # The cut rewrites the file in place: a new size/mtime means it happened.
+        if _stamp(input_video) != _before and globals().get("early") is not None:
+            early["invalid"] = True  # its words cover the part that was cut off
 
     # Layout choice is per SOURCE video, not per clip: one upload and one call
     # instead of one per clip, and the answer is a property of the material
@@ -2250,7 +2262,7 @@ if __name__ == '__main__':
             with early_state["lock"]:
                 early_state["abandoned"] = True  # a late audio would only duplicate work
                 started = early_state["started"]
-            if started:
+            if started and not early_state["invalid"]:
                 early_state["done"].wait()
                 if early_state["transcript"] is not None:
                     transcript = early_state["transcript"]
