@@ -1218,7 +1218,14 @@ def auto_hook_clip(clip_path, clip, captions=None):
                 print(f"   🪝 Hook + 💬 captions burned in one pass ({style}, {seconds:g}s): {text}")
                 return out_path, {**config, "_captioned": captioned}
             except Exception as e:
-                print(f"   ⚠️ Combined hook+captions pass failed ({type(e).__name__}: {e}) — "
+                # The job log truncates long lines, so name the exit code and the
+                # last non-progress stderr lines first, not the whole argv.
+                detail = type(e).__name__
+                if isinstance(e, subprocess.CalledProcessError):
+                    tail = [l for l in (e.stderr or b"").decode(errors="replace").splitlines()
+                            if l.strip() and not l.lstrip().startswith("frame=")][-3:]
+                    detail = f"exit {e.returncode}: {' | '.join(tail)[-300:]}"
+                print(f"   ⚠️ Combined hook+captions pass failed ({detail}) — "
                       f"burning them one at a time.")
                 if os.path.exists(captioned):
                     os.remove(captioned)  # never leave a half-written subtitled_ behind
