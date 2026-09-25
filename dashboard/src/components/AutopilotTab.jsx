@@ -93,6 +93,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
   const [rightsAck, setRightsAck] = useState(false);
   const [running, setRunning] = useState(null);    // video id being submitted
   const [notice, setNotice] = useState('');
+  // Feedback for "clip it", shown next to the list: the page-level notice sits
+  // at the top of the tab, off screen from the button, so a click looked dead.
+  const [listNotice, setListNotice] = useState('');
   const [opening, setOpening] = useState(null);
   const pollRef = useRef(null);
 
@@ -180,11 +183,11 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
 
   const runNow = useCallback(async (video) => {
     if (!data?.settings?.rights_ack && !rightsAck) {
-      setNotice('Confirm you own the content of this channel first.');
+      setListNotice('Tick “I own the content…” just above the list first, then clip it again.');
       return;
     }
     setRunning(video.id);
-    setNotice('');
+    setListNotice('');
     try {
       if (!data?.settings?.rights_ack) await save({ rights_ack: true });
       const r = await apiJson('/api/autopilot/run', {
@@ -193,11 +196,11 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
         body: JSON.stringify({ video_id: video.id }),
       });
       track('AutopilotManualRun', { props: { status: r.status } });
-      if (r.status === 'processing') setNotice(`Clipping “${video.title || 'your video'}”. We will email you when the clips are ready.`);
-      else setNotice(`Not clipped: ${REASON_TEXT[r.reason] || r.reason || r.status}.`);
+      if (r.status === 'processing') setListNotice(`Clipping “${video.title || 'your video'}”. We will email you when the clips are ready.`);
+      else setListNotice(`Not clipped: ${REASON_TEXT[r.reason] || r.reason || r.status}.`);
     } catch (e) {
-      if (e?.name === 'QuotaError') setNotice('You are out of minutes for this period.');
-      else setNotice(errText(e, 'Could not start the job.'));
+      if (e?.name === 'QuotaError') setListNotice('You are out of minutes for this period.');
+      else setListNotice(errText(e, 'Could not start the job.'));
     } finally {
       setRunning(null);
       load();
@@ -431,6 +434,20 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             <button onClick={load} className="btn-quiet text-xs" aria-label="refresh"><RefreshCw size={13} /> refresh</button>
           </div>
 
+          {!s.rights_ack && (
+            <label className="flex items-start gap-3 mb-4 text-sm text-ink2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rightsAck}
+                onChange={(e) => { setRightsAck(e.target.checked); setListNotice(''); }}
+                className="mt-0.5 accent-[var(--color-accent)]"
+              />
+              <span>I own the content published on this channel, or have the rights to process it.</span>
+            </label>
+          )}
+          {listNotice && (
+            <div className="mb-4 rounded-card border border-brass/40 bg-brass/5 px-4 py-3 text-sm text-ink2" role="status">{listNotice}</div>
+          )}
           {videosError && <p className="text-warn text-sm mb-3">{ERROR_TEXT[videosError] || 'Could not read your channel.'}</p>}
           {videos === null && <div className="flex justify-center py-6"><Loader2 className="animate-spin text-brass" size={18} /></div>}
           {videos && videos.length === 0 && !videosError && (
