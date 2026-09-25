@@ -1196,19 +1196,25 @@ def auto_hook_clip(clip_path, clip):
 
 
 def render_clip(input_video, final_output_video, output_format="auto",
-                force_strategy=None, crop_overrides=None):
+                force_strategy=None, crop_overrides=None, watermark=False):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
     clip editor's whole-clip framing override. ``crop_overrides`` positions
     individual scenes by hand (the per-scene reframing editor) and wins over
-    ``force_strategy`` for the scenes it names."""
+    ``force_strategy`` for the scenes it names.
+    ``watermark`` burns the free-plan mark into the result: inside the reframe
+    encode on the v2 path, as a separate pass (apply_watermark) otherwise."""
     if output_format == "horizontal":
-        return finalize_clip_passthrough(input_video, final_output_video)
+        ok = finalize_clip_passthrough(input_video, final_output_video)
+        if ok and watermark:
+            apply_watermark(final_output_video)
+        return ok
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
                                      force_strategy=force_strategy,
-                                     crop_overrides=crop_overrides)
+                                     crop_overrides=crop_overrides,
+                                     watermark=watermark)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -1225,6 +1231,23 @@ WATERMARK_Y_RATIO = 0.40
 WATERMARK_OPACITY = 0.85
 
 
+def watermark_logo_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "assets", "watermark.png")
+
+
+def watermark_filter(vw, vh, video="[0:v]", logo="[1:v]", out=""):
+    """filter_complex chain overlaying the logo input on a vw x vh video."""
+    wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
+    x = int(vw * WATERMARK_MARGIN_RATIO)
+    y = int(vh * WATERMARK_Y_RATIO)
+    return (
+        f"{logo}scale={wm_w}:-1,format=rgba,"
+        f"colorchannelmixer=aa={WATERMARK_OPACITY}[wm];"
+        f"{video}[wm]overlay=x={x}:y={y}{out}"
+    )
+
+
 def apply_watermark(video_path):
     """Burn the OpenShorts watermark into a finished clip (free plan).
 
@@ -1232,8 +1255,7 @@ def apply_watermark(video_path):
     GENERAL, horizontal passthrough) gets the mark, and later subtitle/hook
     re-encodes keep it — they re-encode the already-marked pixels.
     """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "assets", "watermark.png")
+    logo_path = watermark_logo_path()
     if not os.path.exists(logo_path):
         print(f"   ⚠️ Watermark asset missing ({logo_path}); clip kept unmarked.")
         return False
@@ -1251,14 +1273,7 @@ def apply_watermark(video_path):
         print(f"   ⚠️ Could not probe clip for watermark ({e}); clip kept unmarked.")
         return False
 
-    wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
-    x = int(vw * WATERMARK_MARGIN_RATIO)
-    y = int(vh * WATERMARK_Y_RATIO)
-    filt = (
-        f"[1:v]scale={wm_w}:-1,format=rgba,"
-        f"colorchannelmixer=aa={WATERMARK_OPACITY}[wm];"
-        f"[0:v][wm]overlay=x={x}:y={y}"
-    )
+    filt = watermark_filter(vw, vh)
     tmp_path = video_path + ".wm.mp4"
     cmd = ["ffmpeg", "-y", "-i", video_path, "-i", logo_path,
            "-filter_complex", filt,
@@ -1277,7 +1292,7 @@ def apply_watermark(video_path):
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
-                              force_strategy=None, crop_overrides=None):
+                              force_strategy=None, crop_overrides=None, watermark=False):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
     scene detection and Active Speaker Tracking (MediaPipe).
@@ -1294,7 +1309,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
-                                       crop_overrides=crop_overrides)
+                                       crop_overrides=crop_overrides,
+                                       watermark=watermark)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
@@ -1489,6 +1505,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         if os.path.exists(leftover):
             os.remove(leftover)
 
+    if watermark:
+        apply_watermark(final_output_video)
     return True
 
 # --- Transcript checkpoint (survive a redeploy without paying twice) ---------
@@ -2176,15 +2194,16 @@ if __name__ == '__main__':
                     # ffmpeg cut — re-encoding for precision on strict seconds
                     cut_clip(input_video, clip_temp_path, start, end, i + 1)
 
-                    success = render_clip(clip_temp_path, clip_final_path, output_format)
                     # Layer order: watermark burns into the canonical (so any
                     # later hook replacement, which re-derives from it, keeps
                     # the branding), the hook is a derived hooked_ file, and
-                    # captions go last on top of whichever is current. Each
-                    # worker writes only its own clip dict, so the re-dump
-                    # after the pool is race-free.
-                    if success and os.environ.get("WATERMARK") == "1":
-                        apply_watermark(clip_final_path)
+                    # captions go last on top of whichever is current. The
+                    # watermark rides the reframe's own encode instead of a
+                    # pass of its own: one encode less per clip on ~97% of
+                    # jobs (free plan). Each worker writes only its own clip
+                    # dict, so the re-dump after the pool is race-free.
+                    success = render_clip(clip_temp_path, clip_final_path, output_format,
+                                          watermark=os.environ.get("WATERMARK") == "1")
                     deliver_path = clip_final_path
                     # Which stretches were stacked (SPLIT): captions go on the
                     # seam there, and /api/subtitle needs it again later.
