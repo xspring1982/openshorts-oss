@@ -481,16 +481,11 @@ def _sanitize_font_name(name):
     return cleaned or "Verdana"
 
 
-def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
-                   font_name="Verdana", font_color="#FFFFFF",
-                   border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
-    """
-    Burns subtitles into the video using FFmpeg.
-    Supports two modes:
-    - Outline mode (bg_opacity=0): Text with colored outline/border
-    - Box mode (bg_opacity>0): Text with semi-transparent background box
-    """
+def subtitles_filter(srt_path, alignment=2, fontsize=16,
+                     font_name="Verdana", font_color="#FFFFFF",
+                     border_color="#000000", border_width=2,
+                     bg_color="#000000", bg_opacity=0.0):
+    """The -vf string burn_subtitles uses (also fed to hooks.add_hook_to_video)."""
     # Position mapping
     ass_alignment = 2
     align_lower = str(alignment).lower()
@@ -560,6 +555,24 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     else:
         vf = (f"subtitles=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
               f":charenc=UTF-8:force_style='{style_string}'")
+
+    return vf
+
+
+def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
+                   font_name="Verdana", font_color="#FFFFFF",
+                   border_color="#000000", border_width=2,
+                   bg_color="#000000", bg_opacity=0.0):
+    """
+    Burns subtitles into the video using FFmpeg.
+    Supports two modes:
+    - Outline mode (bg_opacity=0): Text with colored outline/border
+    - Box mode (bg_opacity>0): Text with semi-transparent background box
+    """
+    vf = subtitles_filter(srt_path, alignment=alignment, fontsize=fontsize,
+                          font_name=font_name, font_color=font_color,
+                          border_color=border_color, border_width=border_width,
+                          bg_color=bg_color, bg_opacity=bg_opacity)
 
     cmd = [
         'ffmpeg', '-y',

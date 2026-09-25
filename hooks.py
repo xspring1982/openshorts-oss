@@ -370,12 +370,17 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     img.save(output_image_path)
     return output_image_path, canvas_w, canvas_h
 
-def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="classic"):
+def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="classic",
+                      also=None):
     """
     Overlays text hook onto video.
     position: 'top', 'center', 'bottom'
     font_scale: float multiplier (1.0 = default)
     style: hook look (see HOOK_STYLES)
+    also: optional (vf, path): ALSO write ``path`` = the hooked picture with
+      ``vf`` applied (the captions), from the same decode. The job pipeline
+      needs both files (the editor re-captions from the hooked one), and one
+      ffmpeg with two outputs saves a full decode + pass per clip.
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video {video_path} not found")
@@ -424,18 +429,29 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         # 4. FFmpeg Command
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
         
-        ffmpeg_cmd = [
-            'ffmpeg', '-y',
-            '-i', video_path,
-            '-i', img_path,
-            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
-                + (f":enable='between(t,0,{float(duration)})'" if duration else ""),
-            '-c:a', 'copy',
-            *video_encode_args(QUALITY),
-            *METADATA_SCRUB,
-            '-movflags', '+faststart',
-            output_path
-        ]
+        overlay = (f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
+                   + (f":enable='between(t,0,{float(duration)})'" if duration else ""))
+        tail = ['-c:a', 'copy', *video_encode_args(QUALITY), *METADATA_SCRUB,
+                '-movflags', '+faststart']
+        if also:
+            extra_vf, extra_path = also
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-i', img_path,
+                '-filter_complex', f"{overlay},split=2[h][c];[c]{extra_vf}[s]",
+                '-map', '[h]', '-map', '0:a?', *tail, output_path,
+                '-map', '[s]', '-map', '0:a?', *tail, extra_path,
+            ]
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-i', img_path,
+                '-filter_complex', overlay,
+                *tail,
+                output_path
+            ]
         
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
         print(f"✅ Hook added to {output_path}")

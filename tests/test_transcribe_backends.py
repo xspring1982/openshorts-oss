@@ -348,12 +348,14 @@ class TestParakeetMemorySettings:
         assert opts["cudnn_conv_use_max_workspace"] == "0"
 
 
-def test_parakeet_threads_sleep_but_the_vad_keeps_its_defaults(monkeypatch):
-    """Spinning ORT threads were most of a job's CPU; the VAD must stay on
-    load_vad's defaults (any options there change the transcript)."""
+def test_parakeet_threads_sleep_and_the_vad_runs_on_one_cpu_thread(monkeypatch):
+    """Spinning ORT threads were most of a job's CPU, and Silero on CUDA most
+    of a transcription's wall time."""
     class FakeOptions:
         def __init__(self):
             self.entries = {}
+            self.intra_op_num_threads = 0
+            self.inter_op_num_threads = 0
 
         def add_session_config_entry(self, key, value):
             self.entries[key] = value
@@ -382,7 +384,11 @@ def test_parakeet_threads_sleep_but_the_vad_keeps_its_defaults(monkeypatch):
 
     tb._get_parakeet_model()
 
-    entries = calls["model"]["sess_options"].entries
-    assert entries == {"session.intra_op.allow_spinning": "0",
-                       "session.inter_op.allow_spinning": "0"}
-    assert calls["vad"] == (("silero",), {})
+    no_spin = {"session.intra_op.allow_spinning": "0",
+               "session.inter_op.allow_spinning": "0"}
+    assert calls["model"]["sess_options"].entries == no_spin
+    args, kw = calls["vad"]
+    assert args == ("silero",)
+    assert kw["providers"] == ["CPUExecutionProvider"]
+    assert kw["sess_options"].entries == no_spin
+    assert kw["sess_options"].intra_op_num_threads == 1

@@ -1072,7 +1072,8 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None):
+def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None,
+                      plan_only=False):
     """Burn the default caption style onto a finished clip.
 
     ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
@@ -1092,6 +1093,9 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
     Returns the captioned path, or None when captions were skipped (silent
     video, no words in range, AUTO_CAPTIONS=0, or any failure — a caption
     problem must never cost the user the clip they already paid for).
+
+    ``plan_only`` writes the .ass but burns nothing: returns (vf,
+    generation_id) for auto_hook_clip to burn in the same pass as the hook.
     """
     if os.environ.get("AUTO_CAPTIONS", "1").strip() == "0":
         return None
@@ -1144,6 +1148,12 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
             print("   ℹ️ No words in range — clip ships without captions.")
             return None
 
+        if plan_only:
+            vf = _subs.subtitles_filter(
+                ass_path, alignment=style["alignment"], fontsize=style["font_size"],
+                font_name=style["font_name"], font_color=style["font_color"],
+                border_color=style["border_color"], border_width=style["border_width"])
+            return vf, generation_id
         _subs.burn_subtitles(
             clip_path, ass_path, out_path,
             alignment=style["alignment"], fontsize=style["font_size"],
@@ -1157,7 +1167,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None
 
 
-def auto_hook_clip(clip_path, clip):
+def auto_hook_clip(clip_path, clip, captions=None):
     """Burn the clip's Gemini hook text as a DERIVED file (AUTO_HOOK=1).
 
     Writes ``hooked_<ts>_<clip filename>`` next to the canonical clip, exactly
@@ -1168,7 +1178,13 @@ def auto_hook_clip(clip_path, clip):
 
     Returns (hooked_path, hook_config), or None when skipped or failed — a
     hook problem must never cost the user the clip itself (same fail-open
-    contract as auto_caption_clip)."""
+    contract as auto_caption_clip).
+
+    ``captions`` = (vf, generation_id) from auto_caption_clip(plan_only=True):
+    the captioned ``subtitled_<id>_hooked_...`` file is written by the same
+    ffmpeg, from the same decode, and its path lands in hook_config under
+    "_captioned" (popped by the caller). If that combined pass fails, the hook
+    is burned alone and the caller captions the way it always did."""
     text = (clip.get('viral_hook_text') or '').strip()
     if not text:
         return None
@@ -1184,11 +1200,26 @@ def auto_hook_clip(clip_path, clip):
         output_dir = os.path.dirname(clip_path)
         out_path = os.path.join(
             output_dir, f"hooked_{int(time.time())}_{os.path.basename(clip_path)}")
+        config = {"text": text, "style": style, "position": "top",
+                  "duration_seconds": seconds}
+        if captions:
+            vf, generation_id = captions
+            captioned = os.path.join(
+                output_dir, f"subtitled_{generation_id}_{os.path.basename(out_path)}")
+            try:
+                add_hook_to_video(clip_path, text, out_path, position="top",
+                                  duration=seconds, style=style, also=(vf, captioned))
+                print(f"   🪝 Hook + 💬 captions burned in one pass ({style}, {seconds:g}s): {text}")
+                return out_path, {**config, "_captioned": captioned}
+            except Exception as e:
+                print(f"   ⚠️ Combined hook+captions pass failed ({type(e).__name__}: {e}) — "
+                      f"burning them one at a time.")
+                if os.path.exists(captioned):
+                    os.remove(captioned)  # never leave a half-written subtitled_ behind
         add_hook_to_video(clip_path, text, out_path, position="top",
                           duration=seconds, style=style)
         print(f"   🪝 Hook burned ({style}, {seconds:g}s): {text}")
-        return out_path, {"text": text, "style": style, "position": "top",
-                          "duration_seconds": seconds}
+        return out_path, config
     except Exception as e:
         print(f"   ⚠️ Auto-hook failed ({type(e).__name__}: {e}) — "
               f"delivering the clip without it.")
@@ -2214,14 +2245,24 @@ if __name__ == '__main__':
                     # and title from three of its frames BEFORE burning them.
                     if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
                         hook_grounding.reground(clip_final_path, clip, transcript, start, end)
+                    captioned = None
+                    split_ranges = _layouts.split_ranges(clip['layout_ranges'])
                     if success and os.environ.get("AUTO_HOOK") == "1":
-                        hooked = auto_hook_clip(clip_final_path, clip)
+                        # Captions ride the hook's ffmpeg (one decode, two
+                        # outputs) when both are on; see auto_hook_clip.
+                        plan = None
+                        if (clip.get('viral_hook_text') or '').strip():
+                            plan = auto_caption_clip(clip_final_path, transcript, start, end,
+                                                     split_ranges=split_ranges, plan_only=True)
+                        hooked = auto_hook_clip(clip_final_path, clip, captions=plan)
                         if hooked:
                             deliver_path, clip['auto_hook'] = hooked
+                            captioned = clip['auto_hook'].pop("_captioned", None)
                     if success:
-                        captioned = auto_caption_clip(
-                            deliver_path, transcript, start, end,
-                            split_ranges=_layouts.split_ranges(clip['layout_ranges']))
+                        if not captioned:
+                            captioned = auto_caption_clip(
+                                deliver_path, transcript, start, end,
+                                split_ranges=split_ranges)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                         # Hand the API the file to actually serve for this clip.
                         # Without it the status poller guesses the clean reframe
@@ -2238,7 +2279,10 @@ if __name__ == '__main__':
                     if os.path.exists(clip_temp_path):
                         os.remove(clip_temp_path)
 
-            clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
+            # 6, not 3: measured side by side on balrog at load 48-67, a 7-clip
+            # job finished 16% sooner with the same CPU, and the peak VRAM stayed
+            # at 12 GB of 20 (bench, 25-sep-2026).
+            clip_workers = max(int(os.environ.get("CLIP_WORKERS", "6")), 1)
             shorts = clips_data['shorts']
             failed = []
             with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:

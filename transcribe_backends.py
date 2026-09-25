@@ -288,15 +288,33 @@ def parakeet_session_options():
     (prod bench 25-sep-2026). Without it: ~35 CPU-s, and the transcript is
     byte-identical (text and every word timestamp, 3 real videos).
 
-    Parakeet only: the VAD must keep ``load_vad``'s defaults. Passing it any
-    options, even an empty SessionOptions, makes onnx_asr drop its default
-    providers, the VAD falls to the CPU, and a word and 16 timestamps change.
+    The VAD gets its own options (vad_load_kwargs).
     """
     import onnxruntime as rt
     opts = rt.SessionOptions()
     opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
     opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
     return opts
+
+
+def vad_load_kwargs():
+    """Silero VAD on the CPU, one sleeping thread.
+
+    load_vad's default puts Silero on CUDA, where it runs one 32 ms chunk at a
+    time with a host/device copy around each: most of a transcription's wall
+    time. On one CPU thread the whole transcription is 2-3x faster (9 min of
+    audio: 28 s -> 9 s) and cheaper in CPU too. The VAD's numbers are not
+    bit-identical across devices: over 3 real videos (3,939 words) one word
+    changed ("claudio" -> "cloud", for "Claude") and a few word times moved by
+    up to 48 ms (bench, 25-sep-2026).
+    """
+    import onnxruntime as rt
+    opts = rt.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return {"sess_options": opts, "providers": ["CPUExecutionProvider"]}
 
 
 def _get_parakeet_model():
@@ -306,7 +324,7 @@ def _get_parakeet_model():
             import onnx_asr
             model = onnx_asr.load_model(PARAKEET_MODEL_ID, providers=parakeet_providers(),
                                         sess_options=parakeet_session_options())
-            vad = onnx_asr.load_vad("silero")
+            vad = onnx_asr.load_vad("silero", **vad_load_kwargs())
             _parakeet_model = model.with_vad(
                 vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()
     return _parakeet_model
