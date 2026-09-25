@@ -279,12 +279,33 @@ def parakeet_providers():
     return [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
 
 
+def parakeet_session_options():
+    """onnxruntime SessionOptions for Parakeet: pool threads sleep, never spin.
+
+    By default every ORT pool thread busy-waits for its next op. On the CUDA
+    path the CPU has almost nothing to do, so that spinning was the work:
+    ~160 CPU-s for a 9-minute video, the biggest CPU cost of a whole job
+    (prod bench 25-sep-2026). Without it: ~35 CPU-s, and the transcript is
+    byte-identical (text and every word timestamp, 3 real videos).
+
+    Parakeet only: the VAD must keep ``load_vad``'s defaults. Passing it any
+    options, even an empty SessionOptions, makes onnx_asr drop its default
+    providers, the VAD falls to the CPU, and a word and 16 timestamps change.
+    """
+    import onnxruntime as rt
+    opts = rt.SessionOptions()
+    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return opts
+
+
 def _get_parakeet_model():
     global _parakeet_model
     with _parakeet_lock:
         if _parakeet_model is None:
             import onnx_asr
-            model = onnx_asr.load_model(PARAKEET_MODEL_ID, providers=parakeet_providers())
+            model = onnx_asr.load_model(PARAKEET_MODEL_ID, providers=parakeet_providers(),
+                                        sess_options=parakeet_session_options())
             vad = onnx_asr.load_vad("silero")
             _parakeet_model = model.with_vad(
                 vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()

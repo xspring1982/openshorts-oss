@@ -346,3 +346,43 @@ class TestParakeetMemorySettings:
         assert name == "CUDAExecutionProvider" and cpu == "CPUExecutionProvider"
         assert opts["arena_extend_strategy"] == "kSameAsRequested"
         assert opts["cudnn_conv_use_max_workspace"] == "0"
+
+
+def test_parakeet_threads_sleep_but_the_vad_keeps_its_defaults(monkeypatch):
+    """Spinning ORT threads were most of a job's CPU; the VAD must stay on
+    load_vad's defaults (any options there change the transcript)."""
+    class FakeOptions:
+        def __init__(self):
+            self.entries = {}
+
+        def add_session_config_entry(self, key, value):
+            self.entries[key] = value
+
+    calls = {}
+
+    class FakeModel:
+        def with_vad(self, vad, batch_size):
+            return self
+
+        def with_timestamps(self):
+            return self
+
+    def load_model(model_id, **kw):
+        calls["model"] = kw
+        return FakeModel()
+
+    def load_vad(*a, **kw):
+        calls["vad"] = (a, kw)
+        return object()
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(SessionOptions=FakeOptions))
+    monkeypatch.setitem(sys.modules, "onnx_asr",
+                        SimpleNamespace(load_model=load_model, load_vad=load_vad))
+    monkeypatch.setattr(tb, "_parakeet_model", None)
+
+    tb._get_parakeet_model()
+
+    entries = calls["model"]["sess_options"].entries
+    assert entries == {"session.intra_op.allow_spinning": "0",
+                       "session.inter_op.allow_spinning": "0"}
+    assert calls["vad"] == (("silero",), {})

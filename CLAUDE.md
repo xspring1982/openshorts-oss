@@ -508,18 +508,23 @@ in-process and the ASR singletons then lived in uvicorn for good, so both
 now call `transcribe_backends.release_models()` when they are done. Size
 `MAX_CONCURRENT_JOBS` against the free VRAM first, then check the CPU.
 
-The CPU is the other ceiling. NVENC only takes the encode: decoding and
-every filter (scale, blur, overlay, captions) run on the host's 20 threads,
-and at peak (8 jobs x `CLIP_WORKERS`=3) balrog sat at load ~100 with the
-card's decoder at 0% (22 and 25-sep-2026), starving the Coolify builds and
-everything else on the box. Two fixes in `ffmpeg_utils`, and new render code
-should use both:
-- `video_decode_args()` before a video's `-i`: NVDEC decode (`-hwaccel cuda`)
-  whenever the encode is on nvenc; `FFMPEG_HWDECODE=0` switches it off.
-- `blurred_backdrop()` for any blurred fill: gblur at quarter size, then
-  scaled up. The full-size gblur on 1080x1920 was most of a GENERAL segment's
-  cost. Together, a GENERAL segment dropped from ~16 s to ~6 s of CPU per 10 s
-  of clip (measured in prod, SSIM 0.994 against the old output).
+The CPU is the other ceiling (balrog: 20 threads, load ~100 at peak on
+22 and 25-sep-2026). Two costs were pure waste and are gone, with the
+delivered clips byte-identical (decoded-frame MD5s + audio, 15 clips of 3
+real videos, bench of 25-sep-2026):
+- **onnxruntime threads spinning** during Parakeet: ~160 CPU-s per 9 min of
+  audio while the GPU did the work. `parakeet_session_options()` turns
+  spinning off for the ASR session only; the VAD must keep `load_vad`'s
+  defaults (see the docstring for why).
+- **A seek per sampled frame** in `analyze_scenes_strategy` and
+  `split_layout`: each seek re-decoded the GOP. `frame_sampler.read_at`
+  reads forward once and returns the same frames.
+Net: a job's CPU roughly halves (Python side -65-80%). What is left is
+ffmpeg decode/filter/encode per pass; any change there (NVDEC decode, a
+cheaper blur, fusing the watermark/hook/caption passes) changes the output
+pixels, so it needs a decision, not just a benchmark. `NVDEC` + a
+quarter-size blur were shipped and reverted on 25-sep-2026 for that reason
+(SSIM 0.998, not identical).
 
 Three guards keep the card from filling (22-sep-2026: 30-60% of jobs failing
 per hour at peak with `MAX_CONCURRENT_JOBS=8`):

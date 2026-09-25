@@ -27,8 +27,8 @@ import punch_in
 import screencast_layout
 import layout_ranges
 import split_layout
-from ffmpeg_utils import (video_encode_args, video_decode_args, blurred_backdrop,
-                          escape_filter_value, QUALITY_FAST, METADATA_SCRUB)
+from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
+                          METADATA_SCRUB)
 
 ANALYSIS_MAX_WIDTH = 640
 
@@ -157,7 +157,8 @@ def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
     fg_h += fg_h % 2
     return (
         f"[0:v]split=2[bga][fga];"
-        f"[bga]{blurred_backdrop(out_w, out_h, 12)}[bg];"
+        f"[bga]scale=-2:{out_h},crop=w=min(iw\\,{out_w}):h={out_h},"
+        f"scale={out_w}:{out_h},gblur=sigma=12[bg];"
         # Scale by HEIGHT, then trim any overflow to the output width. crop
         # centres by default, and min() makes it a no-op when the scaled source
         # is already narrower than the frame (portrait/square sources).
@@ -576,8 +577,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
 
             _run([
                 "ffmpeg", "-y", "-loglevel", "error",
-                "-ss", f"{ss:.4f}", "-t", f"{dur:.4f}",
-                *video_decode_args(), "-i", input_video,
+                "-ss", f"{ss:.4f}", "-t", f"{dur:.4f}", "-i", input_video,
                 "-filter_complex", graph, "-map", "[v]",
                 *video_encode_args(QUALITY_FAST), "-an", seg_path,
             ])

@@ -9,10 +9,8 @@ from ffmpeg_utils import (
     METADATA_SCRUB,
     QUALITY,
     QUALITY_FAST,
-    blurred_backdrop,
     mark_ai_generated,
     reset_encoder_cache,
-    video_decode_args,
     video_encode_args,
 )
 
@@ -20,7 +18,6 @@ from ffmpeg_utils import (
 @pytest.fixture(autouse=True)
 def _clean_encoder_state(monkeypatch):
     monkeypatch.delenv("FFMPEG_ENCODER", raising=False)
-    monkeypatch.delenv("FFMPEG_HWDECODE", raising=False)
     reset_encoder_cache()
     yield
     reset_encoder_cache()
@@ -85,42 +82,6 @@ def test_returns_a_fresh_list_each_call():
     first = video_encode_args(QUALITY)
     first.append("-mutated")
     assert "-mutated" not in video_encode_args(QUALITY)
-
-
-def test_decode_stays_on_the_cpu_under_x264():
-    assert video_decode_args() == []
-
-
-def test_decode_moves_to_the_gpu_with_the_encode(monkeypatch):
-    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
-    monkeypatch.setattr(ffmpeg_utils, "_probe_nvenc", lambda: True)
-    assert video_decode_args() == ["-hwaccel", "cuda"]
-
-
-def test_decode_stays_on_the_cpu_when_nvenc_is_unusable(monkeypatch):
-    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
-    monkeypatch.setattr(ffmpeg_utils, "_probe_nvenc", lambda: False)
-    assert video_decode_args() == []
-
-
-def test_hwdecode_can_be_switched_off_on_a_gpu(monkeypatch):
-    monkeypatch.setenv("FFMPEG_ENCODER", "nvenc")
-    monkeypatch.setenv("FFMPEG_HWDECODE", "0")
-    monkeypatch.setattr(ffmpeg_utils, "_probe_nvenc", lambda: True)
-    assert video_decode_args() == []
-
-
-def test_backdrop_blurs_at_quarter_size_and_fills_the_frame():
-    chain = blurred_backdrop(1080, 1920, 12)
-    assert "scale=-2:480,crop=w=min(iw\\,270):h=480" in chain
-    assert "gblur=sigma=3," in chain
-    assert chain.endswith("scale=1080:1920")
-
-
-def test_backdrop_keeps_the_small_size_even():
-    chain = blurred_backdrop(1080, 1350, 14)
-    assert "scale=-2:336" in chain and "min(iw\\,270)" in chain
-    assert "gblur=sigma=3.5," in chain
 
 
 def test_metadata_scrub_covers_global_and_per_stream():
@@ -223,12 +184,6 @@ def test_successful_cut_runs_once(_cut):
     fake = _cut([(0, 5_000_000, "")])
     assert len(fake.commands) == 1
     assert "h264_nvenc" in fake.commands[0]
-
-
-def test_cut_decodes_the_source_on_the_gpu(_cut):
-    cmd = _cut([(0, 5_000_000, "")]).commands[0]
-    assert cmd.index("-hwaccel") < cmd.index("-i")
-    assert cmd[cmd.index("-hwaccel") + 1] == "cuda"
 
 
 def test_retry_stays_on_the_gpu_after_a_wait(_cut):

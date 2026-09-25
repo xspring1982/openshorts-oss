@@ -22,6 +22,7 @@ import mediapipe as mp
 from google import genai
 from google.genai import types as genai_types
 
+import frame_sampler
 import gemini_worker
 import hook_grounding
 import layout_picker
@@ -30,8 +31,8 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best)
-from ffmpeg_utils import (video_encode_args, video_decode_args, audio_encode_args,
-                          cut_clip, QUALITY, QUALITY_FAST, METADATA_SCRUB)
+from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
+                          QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
 import json
 
@@ -569,7 +570,10 @@ def analyze_scenes_strategy(video_path, scenes):
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    for start, end in tqdm(scenes, desc="   Analyzing Scenes"):
+    # Every scene's samples first, then one forward pass over the clip
+    # (frame_sampler): same frames, same detector calls in the same order.
+    plan = []
+    for si, (start, end) in enumerate(scenes):
         s_f, e_f = start.get_frames(), end.get_frames()
         # Sample 5 frames spread across the scene, clamped inside it (the old
         # start+5/end-5 samples landed outside scenes shorter than ~10 frames).
@@ -577,22 +581,25 @@ def analyze_scenes_strategy(video_path, scenes):
         frames_to_check = sorted(set(
             int(round(f)) for f in np.linspace(s_f + margin, e_f - 1 - margin, 5)
         ))
+        plan.extend((si, f_idx) for f_idx in frames_to_check)
 
-        face_counts = []
-        for f_idx in frames_to_check:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-            ret, frame = cap.read()
-            if not ret: continue
+    counts_per_scene = [[] for _ in scenes]
+    frames = frame_sampler.read_at(cap, [f_idx for _si, f_idx in plan])
+    for (si, _f_idx), frame in tqdm(zip(plan, frames), total=len(plan),
+                                    desc="   Analyzing Scenes"):
+        if frame is None:
+            continue
 
-            # Near-black frames (fades, cut-to-black) carry no faces and used
-            # to drag single-person scenes into GENERAL. Skip them.
-            if frame.mean() < 16:
-                continue
+        # Near-black frames (fades, cut-to-black) carry no faces and used
+        # to drag single-person scenes into GENERAL. Skip them.
+        if frame.mean() < 16:
+            continue
 
-            # Detect faces
-            candidates = detect_face_candidates(frame)
-            face_counts.append(len(candidates))
+        # Detect faces
+        candidates = detect_face_candidates(frame)
+        counts_per_scene[si].append(len(candidates))
 
+    for face_counts in counts_per_scene:
         # Decision Logic
         if not face_counts:
             avg_faces = 0
@@ -1253,7 +1260,7 @@ def apply_watermark(video_path):
         f"[0:v][wm]overlay=x={x}:y={y}"
     )
     tmp_path = video_path + ".wm.mp4"
-    cmd = ["ffmpeg", "-y", *video_decode_args(), "-i", video_path, "-i", logo_path,
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", logo_path,
            "-filter_complex", filt,
            *video_encode_args(QUALITY), "-c:a", "copy", *METADATA_SCRUB,
            "-movflags", "+faststart", tmp_path]
