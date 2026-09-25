@@ -931,8 +931,11 @@ def download_youtube_video(url, output_dir="."):
     def _attempt(extractor_args, fmt, proxy, cookies=True):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
+        # Extracted ONCE, unprocessed, and handed to the download below: a
+        # plain ydl.download([url]) ran the whole extraction again (player
+        # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=False, process=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
         if os.path.exists(expected):
@@ -945,7 +948,10 @@ def download_youtube_video(url, output_dir="."):
             'progress_hooks': [_progress_hook],
         }
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            ydl.download([url])
+            if info.get('_type', 'video') == 'video' and info.get('formats'):
+                ydl.process_ie_result(info, download=True)
+            else:
+                ydl.download([url])
         return sanitized
 
     # DIRECT_FIRST=1: try the server's own IP before spending proxy bandwidth.
