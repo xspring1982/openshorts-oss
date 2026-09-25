@@ -935,6 +935,23 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
 
     _early = {"started": False}
 
+    # A job only paid for so many minutes (MAX_SOURCE_MINUTES: the quota-wall
+    # offer; SOURCE_CAP_MINUTES: every metered job, a safety cap). yt-dlp used
+    # to fetch the whole source anyway and cap_source_duration cut it after:
+    # on a finished livestream (no duration, hours of 1080p60) that was GBs of
+    # proxy and a job stuck downloading for tens of minutes. Past the cap (or
+    # with no known duration) only the paid range plus a margin is fetched;
+    # cap_source_duration still makes the exact cut afterwards.
+    _range_cap = None
+    for _var, _margin in (("MAX_SOURCE_MINUTES", 5.0), ("SOURCE_CAP_MINUTES", 60.0)):
+        _raw = os.environ.get(_var, "").strip()
+        if _raw:
+            try:
+                _range_cap = float(_raw) * 60.0 + _margin
+            except ValueError:
+                pass
+            break
+
     def _early_audio(info, extractor_args, proxy, cookies):
         """Fetch the audio track alone and hand it to on_audio (background)."""
         import copy
@@ -966,9 +983,14 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
+        ranged = False
+        if _range_cap:
+            _dur = info.get('duration')
+            ranged = not _dur or float(_dur) > _range_cap
         # Once per download, and not on the per-GB proxy (that is paid bytes,
-        # and it is the last resort anyway).
-        if (on_audio and not _early["started"] and info.get('formats')
+        # and it is the last resort anyway). Not for a ranged download either:
+        # the early audio would be the whole source.
+        if (on_audio and not _early["started"] and info.get('formats') and not ranged
                 and not (_proxy and proxy == _proxy)):
             _early["started"] = True
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
@@ -983,6 +1005,11 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        if ranged:
+            from yt_dlp.utils import download_range_func
+            dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
+            print(f"✂️ Source is {'of unknown length' if not info.get('duration') else 'longer than the paid minutes'}"
+                  f": downloading only the first {_range_cap / 60:.0f} min.")
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
             if info.get('_type', 'video') == 'video' and info.get('formats'):
                 ydl.process_ie_result(info, download=True)
