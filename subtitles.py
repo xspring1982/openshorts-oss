@@ -3,8 +3,8 @@ import re
 import subprocess
 import sys
 
-from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
-                          METADATA_SCRUB)
+from ffmpeg_utils import (video_encode_args, video_decode_args, escape_filter_value,
+                          QUALITY, METADATA_SCRUB)
 
 
 _STDIO_CONFIGURED = False
@@ -563,6 +563,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
 
     cmd = [
         'ffmpeg', '-y',
+        *video_decode_args(),
         '-i', video_path,
         '-vf', vf,
         '-c:a', 'copy',

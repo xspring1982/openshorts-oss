@@ -30,8 +30,8 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best)
-from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
-                          QUALITY_FAST, METADATA_SCRUB)
+from ffmpeg_utils import (video_encode_args, video_decode_args, audio_encode_args,
+                          cut_clip, QUALITY, QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
 import json
 
@@ -1253,7 +1253,7 @@ def apply_watermark(video_path):
         f"[0:v][wm]overlay=x={x}:y={y}"
     )
     tmp_path = video_path + ".wm.mp4"
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", logo_path,
+    cmd = ["ffmpeg", "-y", *video_decode_args(), "-i", video_path, "-i", logo_path,
            "-filter_complex", filt,
            *video_encode_args(QUALITY), "-c:a", "copy", *METADATA_SCRUB,
            "-movflags", "+faststart", tmp_path]

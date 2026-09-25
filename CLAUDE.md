@@ -506,7 +506,20 @@ process itself was the biggest tenant (7.7 GB idle on 17-sep-2026): the
 thumbnail studio and `/api/subtitle` on a dubbed clip transcribe
 in-process and the ASR singletons then lived in uvicorn for good, so both
 now call `transcribe_backends.release_models()` when they are done. Size
-`MAX_CONCURRENT_JOBS` against the free VRAM, not the core count.
+`MAX_CONCURRENT_JOBS` against the free VRAM first, then check the CPU.
+
+The CPU is the other ceiling. NVENC only takes the encode: decoding and
+every filter (scale, blur, overlay, captions) run on the host's 20 threads,
+and at peak (8 jobs x `CLIP_WORKERS`=3) balrog sat at load ~100 with the
+card's decoder at 0% (22 and 25-sep-2026), starving the Coolify builds and
+everything else on the box. Two fixes in `ffmpeg_utils`, and new render code
+should use both:
+- `video_decode_args()` before a video's `-i`: NVDEC decode (`-hwaccel cuda`)
+  whenever the encode is on nvenc; `FFMPEG_HWDECODE=0` switches it off.
+- `blurred_backdrop()` for any blurred fill: gblur at quarter size, then
+  scaled up. The full-size gblur on 1080x1920 was most of a GENERAL segment's
+  cost. Together, a GENERAL segment dropped from ~16 s to ~6 s of CPU per 10 s
+  of clip (measured in prod, SSIM 0.994 against the old output).
 
 Three guards keep the card from filling (22-sep-2026: 30-60% of jobs failing
 per hour at peak with `MAX_CONCURRENT_JOBS=8`):

@@ -259,6 +259,7 @@ WHISPER_MODEL=large-v3-turbo
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE=float16
 FFMPEG_ENCODER=auto           # probes h264_nvenc at startup, falls back to x264
+FFMPEG_HWDECODE=1             # default: decode on the GPU (NVDEC) whenever the encode is on nvenc
 TRANSCRIBE_BACKEND=parakeet   # optional: ~2x faster than whisper, 25 European languages, auto-falls back to whisper
 ASR_GPU_CONCURRENCY=1
 ```

@@ -6,7 +6,7 @@ import urllib.request
 import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB
+from ffmpeg_utils import video_encode_args, video_decode_args, QUALITY, METADATA_SCRUB
 
 
 def _truncate_bytes(text, max_bytes):
@@ -426,6 +426,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         
         ffmpeg_cmd = [
             'ffmpeg', '-y',
+            *video_decode_args(),
             '-i', video_path,
             '-i', img_path,
             '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
