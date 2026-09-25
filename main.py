@@ -983,10 +983,15 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
+        # Only when the whole source is far bigger than what was paid for: a
+        # ranged fetch goes through ffmpeg at ~1-2.5x realtime, while a native
+        # download of a source a bit over the cap takes seconds. A 21-min video
+        # on a 19-min cap took 8 min ranged against ~30 s whole (prod,
+        # 25-sep-2026); a finished 6.7 h livestream is ~13 GB whole.
         ranged = False
         if _range_cap:
             _dur = info.get('duration')
-            ranged = not _dur or float(_dur) > _range_cap
+            ranged = not _dur or float(_dur) > max(3 * _range_cap, _range_cap + 2700)
         # Once per download, and not on the per-GB proxy (that is paid bytes,
         # and it is the last resort anyway). Not for a ranged download either:
         # the early audio would be the whole source.
