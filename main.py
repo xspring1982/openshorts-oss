@@ -802,10 +802,15 @@ def cap_source_duration(input_video, max_minutes, safety=False):
     raise RuntimeError(f"could not cut the source to its first {float(max_minutes):g} minutes")
 
 
-def download_youtube_video(url, output_dir="."):
+def download_youtube_video(url, output_dir=".", on_audio=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
+
+    ``on_audio(path, duration)``: when given, the audio track is also fetched
+    on its own, in parallel, and handed over as soon as it lands, so the
+    caller can transcribe while the (much larger) video is still coming. It is
+    the same audio format the merged mp4 gets. Never on the per-GB proxy.
     """
     # SSRF guard: block non-http(s) schemes and private/loopback/metadata hosts
     # before handing the URL to yt-dlp.
@@ -928,6 +933,30 @@ def download_youtube_video(url, output_dir="."):
                                       or d.get('total_bytes_estimate')
                                       or d.get('downloaded_bytes') or 0)
 
+    _early = {"started": False}
+
+    def _early_audio(info, extractor_args, proxy, cookies):
+        """Fetch the audio track alone and hand it to on_audio (background)."""
+        import copy
+        try:
+            opts = {
+                **_base_opts(extractor_args, proxy, cookies),
+                'quiet': True, 'verbose': False, 'noprogress': True,
+                'format': 'bestaudio[ext=m4a]/bestaudio',
+                'outtmpl': os.path.join(output_dir, '.early_audio.%(ext)s'),
+                'overwrites': True,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                res = ydl.process_ie_result(copy.deepcopy(info), download=True)
+            path = ((res.get('requested_downloads') or [{}])[0].get('filepath')
+                    or res.get('filepath'))
+            if path and os.path.exists(path):
+                print(f"🎧 Audio ready ahead of the video: {os.path.basename(path)}")
+                on_audio(path, info.get('duration'))
+        except Exception as e:
+            print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
+                  f"transcribing once the video is in.")
+
     def _attempt(extractor_args, fmt, proxy, cookies=True):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
@@ -937,6 +966,13 @@ def download_youtube_video(url, output_dir="."):
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
+        # Once per download, and not on the per-GB proxy (that is paid bytes,
+        # and it is the last resort anyway).
+        if (on_audio and not _early["started"] and info.get('formats')
+                and not (_proxy and proxy == _proxy)):
+            _early["started"] = True
+            threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
+                             daemon=True).start()
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
         if os.path.exists(expected):
             os.remove(expected)
@@ -2082,7 +2118,44 @@ if __name__ == '__main__':
             else:
                 output_dir = "."
         
-        input_video, video_title = download_youtube_video(args.url, output_dir)
+        # Transcription (and the Gemini pick) start on the audio track while the
+        # video is still downloading; see download_youtube_video(on_audio=).
+        # Not for capped sources (the cut happens on the video file), not when
+        # a checkpoint or a precomputed transcript already has the words.
+        early = {"lock": threading.Lock(), "done": threading.Event(), "started": False,
+                 "abandoned": False, "transcript": None, "clips": None}
+
+        def _early_work(audio_path, audio_duration):
+            try:
+                t = transcribe_video(audio_path)
+                early["transcript"] = t
+                if audio_duration and not speech_is_sparse(t, audio_duration):
+                    early["clips"] = get_viral_clips(t, audio_duration)
+            except Exception as e:
+                print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
+                early["transcript"] = early["clips"] = None
+            finally:
+                early["done"].set()
+                try:
+                    os.remove(audio_path)
+                except OSError:
+                    pass
+
+        def _on_audio(audio_path, audio_duration):
+            with early["lock"]:
+                if early["abandoned"]:
+                    return
+                early["started"] = True
+            threading.Thread(target=_early_work, args=(audio_path, audio_duration),
+                             daemon=True).start()
+
+        use_early = (not args.skip_analysis and not args.transcript
+                     and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
+                     and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
+                     and not os.environ.get("SOURCE_CAP_MINUTES", "").strip()
+                     and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
+        input_video, video_title = download_youtube_video(
+            args.url, output_dir, on_audio=_on_audio if use_early else None)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2172,6 +2245,18 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"⚠️ Could not use precomputed transcript ({e}) — transcribing normally.")
                 transcript = None
+        early_state = globals().get("early")
+        if transcript is None and early_state is not None:
+            with early_state["lock"]:
+                early_state["abandoned"] = True  # a late audio would only duplicate work
+                started = early_state["started"]
+            if started:
+                early_state["done"].wait()
+                if early_state["transcript"] is not None:
+                    transcript = early_state["transcript"]
+                    print(f"♻️ Using the transcript made while the video downloaded "
+                          f"({len(transcript['segments'])} segments).")
+                    save_transcript_checkpoint(output_dir, transcript, input_video, duration)
         if transcript is None:
             transcript = load_transcript_checkpoint(output_dir, input_video, duration)
             if transcript is not None:
@@ -2193,7 +2278,12 @@ if __name__ == '__main__':
             transcript = None
 
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
-        if transcript is not None:
+        early_clips = (early_state or {}).get("clips") if early_state else None
+        if (transcript is not None and early_clips
+                and transcript is early_state["transcript"]):
+            print("♻️ Using the clips Gemini picked while the video downloaded.")
+            clips_data = early_clips
+        elif transcript is not None:
             clips_data = get_viral_clips(transcript, duration)
         else:
             clips_data = get_visual_clips(input_video, duration)
@@ -2243,8 +2333,8 @@ if __name__ == '__main__':
                     # the branding), the hook is a derived hooked_ file, and
                     # captions go last on top of whichever is current. The
                     # watermark rides the reframe's own encode instead of a
-                    # pass of its own: one encode less per clip on ~97% of
-                    # jobs (free plan). Each worker writes only its own clip
+                    # pass of its own: one encode less per clip on every
+                    # free-plan job. Each worker writes only its own clip
                     # dict, so the re-dump after the pool is race-free.
                     success = render_clip(clip_temp_path, clip_final_path, output_format,
                                           watermark=os.environ.get("WATERMARK") == "1")
@@ -2292,7 +2382,7 @@ if __name__ == '__main__':
                     if os.path.exists(clip_temp_path):
                         os.remove(clip_temp_path)
 
-            # 6, not 3: measured side by side on balrog at load 48-67, a 7-clip
+            # 6, not 3: measured side by side on the GPU host at load 48-67, a 7-clip
             # job finished 16% sooner with the same CPU, and the peak VRAM stayed
             # at 12 GB of 20 (bench, 25-sep-2026).
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "6")), 1)

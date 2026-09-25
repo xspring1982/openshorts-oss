@@ -508,7 +508,7 @@ in-process and the ASR singletons then lived in uvicorn for good, so both
 now call `transcribe_backends.release_models()` when they are done. Size
 `MAX_CONCURRENT_JOBS` against the free VRAM first, then check the CPU.
 
-The CPU is the other ceiling (balrog: 20 threads, load ~100 at peak on
+The CPU is the other ceiling (a 20-thread host sat at load ~100 at peak on
 22 and 25-sep-2026). Two costs were pure waste and are gone, with the
 delivered clips byte-identical (decoded-frame MD5s + audio, 15 clips of 3
 real videos, bench of 25-sep-2026):
@@ -521,9 +521,8 @@ real videos, bench of 25-sep-2026):
   reads forward once and returns the same frames.
 Net: a job's CPU roughly halves (Python side -65-80%).
 
-Then speed at equal quality (Victor, 25-sep-2026: "optimizar al máximo la
-velocidad sin afectar la calidad"; SSIM 0.990-0.9998 vs before, checked by
-eye, audio identical):
+Then speed at equal quality (25-sep-2026; SSIM 0.990-0.9998 vs before,
+checked by eye, audio identical):
 - **Cut on the card** (`ffmpeg_utils.cut_clip`, NVDEC -> NVENC with
   `-hwaccel_output_format cuda`) for 8-bit 4:2:0 sources; byte-identical to
   the CPU cut. Other sources and a failed GPU cut decode on the CPU.
@@ -531,7 +530,7 @@ eye, audio identical):
   32 ms chunk per launch and was most of the transcription's wall time.
 - **Blur at quarter size** (`ffmpeg_utils.blurred_backdrop`).
 - **Watermark inside the reframe encode** (`reframe_v2.render(watermark=)`),
-  not a pass of its own (~97% of jobs are free plan).
+  not a pass of its own (most jobs are free plan).
 - **hooked_ + subtitled_ from one ffmpeg** (`hooks.add_hook_to_video(also=)`):
   the editor still needs both files (re-caption walks back to hooked_,
   hook replace to the canonical), so nothing is skipped, only one decode.
@@ -539,9 +538,9 @@ eye, audio identical):
 Tried and dropped: NVDEC for the analysis decodes and `scale_cuda` (slower in
 wall, and scale_cuda does not match swscale); yt-dlp chunking/concurrent
 fragments (YouTube serves DASH over https, no gain beyond network noise).
-The bench that measured all this lives on balrog in /root/osbench (see the
-harness docstring): Gemini decisions recorded once and replayed, old and new
-code run side by side, clips compared by decoded-frame MD5 / SSIM.
+Measured with a side-by-side bench: Gemini decisions recorded once and
+replayed, old and new code run at the same time, clips compared by
+decoded-frame MD5 / SSIM.
 
 Three guards keep the card from filling (22-sep-2026: 30-60% of jobs failing
 per hour at peak with `MAX_CONCURRENT_JOBS=8`):
