@@ -4926,7 +4926,7 @@ class HookRequest(BaseModel):
     position: Optional[str] = "top" # top, center, bottom
     size: Optional[str] = "M" # S, M, L
     duration_seconds: Optional[float] = None  # None = hook visible for the whole clip
-    style: Optional[str] = "classic"  # classic/dark/yellow/red/outline/outline_yellow
+    style: Optional[str] = "pill"  # pill/classic/dark/yellow/red/outline/outline_yellow
     remove: Optional[bool] = False  # strip the burned hook instead of adding one
 
 @app.post("/api/hook")

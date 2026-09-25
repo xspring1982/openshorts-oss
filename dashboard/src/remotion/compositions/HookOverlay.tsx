@@ -8,7 +8,12 @@ import {
   interpolate,
 } from "remotion";
 import type { HookConfig } from "../lib/types";
-import { notoSerifFontFace, NOTO_SERIF_FONT_FAMILY } from "../lib/fonts";
+import {
+  notoSerifFontFace,
+  NOTO_SERIF_FONT_FAMILY,
+  montserratFontFace,
+  MONTSERRAT_FONT_FAMILY,
+} from "../lib/fonts";
 
 interface HookOverlayProps {
   config: HookConfig;
@@ -34,9 +39,12 @@ interface HookLook {
   text: string;
   outlinePx: number;
   shadow: boolean;
+  /** One rounded box per line (hooks.py _draw_pills) instead of one card. */
+  pills?: boolean;
 }
 
 const HOOK_LOOKS: Record<string, HookLook> = {
+  pill: { box: "rgba(255, 255, 255, 0.98)", text: "#000000", outlinePx: 0, shadow: false, pills: true },
   classic: { box: "rgba(255, 255, 255, 0.94)", text: "#000000", outlinePx: 0, shadow: true },
   dark: { box: "rgba(18, 18, 20, 0.92)", text: "#FFFFFF", outlinePx: 0, shadow: true },
   yellow: { box: "rgba(255, 214, 0, 0.96)", text: "#000000", outlinePx: 0, shadow: true },
@@ -51,7 +59,7 @@ export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
 
   return (
     <AbsoluteFill>
-      <style>{notoSerifFontFace}</style>
+      <style>{notoSerifFontFace + montserratFontFace}</style>
       <Sequence from={0} durationInFrames={displayFrames} layout="none">
         <HookBox config={config} displayFrames={displayFrames} />
       </Sequence>
@@ -117,12 +125,56 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   }
 
   const positionStyle = POSITION_STYLE[config.position] ?? POSITION_STYLE.top;
-  const look = HOOK_LOOKS[config.style ?? "classic"] ?? HOOK_LOOKS.classic;
+  const look = HOOK_LOOKS[config.style ?? "pill"] ?? HOOK_LOOKS.pill;
 
-  // Base font size: 5% of 1080 width (matches hooks.py logic)
-  const baseFontSize = 1080 * 0.05;
+  // Base font size: 5% (serif) / 6.4% (pill sans) of the 90% box, as hooks.py.
+  const baseFontSize = 1080 * 0.9 * (look.pills ? 0.064 : 0.05 / 0.9);
   const fontSize = Math.round(baseFontSize * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
+
+  if (look.pills) {
+    // box-decoration-break: clone gives every wrapped line its own padded,
+    // rounded box, the same stack hooks.py draws for the FFmpeg path.
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          display: "flex",
+          justifyContent: "center",
+          ...positionStyle,
+        }}
+      >
+        <div
+          style={{
+            opacity: animOpacity,
+            transform: `scale(${animScale}) translateY(${animTranslateY}px)`,
+            maxWidth: "90%",
+            textAlign: "center",
+            lineHeight: 1.62,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: `'${MONTSERRAT_FONT_FAMILY}', 'Montserrat', sans-serif`,
+              fontSize,
+              fontWeight: 800,
+              color: look.text,
+              backgroundColor: look.box ?? "transparent",
+              padding: `${Math.round(fontSize * 0.2)}px ${Math.round(fontSize * 0.48)}px`,
+              borderRadius: Math.round(fontSize * 0.36),
+              WebkitBoxDecorationBreak: "clone",
+              boxDecorationBreak: "clone",
+              wordBreak: "break-word",
+            }}
+          >
+            {config.text}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

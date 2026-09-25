@@ -1262,7 +1262,7 @@ def auto_hook_clip(clip_path, clip, captions=None):
     text = (clip.get('viral_hook_text') or '').strip()
     if not text:
         return None
-    style = os.environ.get("AUTO_HOOK_STYLE", "classic")
+    style = os.environ.get("AUTO_HOOK_STYLE", "pill")
     try:
         seconds = float(os.environ.get("AUTO_HOOK_SECONDS", "5"))
     except ValueError:
@@ -1270,7 +1270,7 @@ def auto_hook_clip(clip_path, clip, captions=None):
     try:
         from hooks import add_hook_to_video, HOOK_STYLES
         if style not in HOOK_STYLES:
-            style = "classic"
+            style = "pill"
         output_dir = os.path.dirname(clip_path)
         out_path = os.path.join(
             output_dir, f"hooked_{int(time.time())}_{os.path.basename(clip_path)}")

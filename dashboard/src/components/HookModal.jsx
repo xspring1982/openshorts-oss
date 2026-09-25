@@ -13,6 +13,7 @@ const ENTRANCE_OPTIONS = [
 
 // Must mirror hooks.py HOOK_STYLES.
 const HOOK_STYLES = [
+    { value: 'pill', label: 'Pills', box: 'rgba(255,255,255,0.98)', text: '#000', sans: true },
     { value: 'classic', label: 'Classic', box: 'rgba(255,255,255,0.94)', text: '#000' },
     { value: 'dark', label: 'Dark', box: 'rgba(18,18,20,0.92)', text: '#fff' },
     { value: 'yellow', label: 'Yellow', box: 'rgba(255,214,0,0.96)', text: '#000' },
@@ -44,7 +45,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
     const [position, setPosition] = useState(prefs.position || 'top');
     const [size, setSize] = useState(prefs.size || 'M');
-    const [style, setStyle] = useState(prefs.style || 'classic');
+    const [style, setStyle] = useState(prefs.style || 'pill');
     const [entranceAnimation, setEntranceAnimation] = useState(prefs.entranceAnimation || 'spring');
     const [displayDuration, setDisplayDuration] = useState(5);
 
@@ -79,8 +80,11 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
         }
     };
 
+    const pillFontFace = "@font-face{font-family:'Montserrat-ExtraBold';src:url('/fonts/Montserrat-ExtraBold.ttf') format('truetype');font-weight:800;}";
+
     return (
         <Modal isOpen={isOpen} onClose={onClose} size="lg" eyebrow="EDITOR · HOOK" title="viral hook">
+            <style>{pillFontFace}</style>
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
@@ -125,8 +129,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={4}
-                                className="input-field resize-none font-serif"
-                                style={{ fontFamily: 'Noto Serif, serif' }}
+                                className="input-field resize-none"
                                 placeholder="Enter text that will stop the scroll..."
                             />
                         </div>
@@ -148,6 +151,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
                                             style={{
                                                 backgroundColor: s.box,
                                                 color: s.text,
+                                                fontFamily: s.sans ? "'Montserrat-ExtraBold', 'Montserrat', sans-serif" : undefined,
                                                 textShadow: s.outline ? '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' : 'none',
                                             }}
                                         >Aa</span>

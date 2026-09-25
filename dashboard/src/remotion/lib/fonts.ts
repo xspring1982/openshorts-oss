@@ -15,6 +15,18 @@ export const notoSerifFontFace = `
 }
 `;
 
+/** Montserrat ExtraBold (bundled, SIL OFL): the "pill" hook style's sans. */
+export const MONTSERRAT_FONT_FAMILY = "Montserrat-ExtraBold";
+
+export const montserratFontFace = `
+@font-face {
+  font-family: '${MONTSERRAT_FONT_FAMILY}';
+  src: url('${staticFile("fonts/Montserrat-ExtraBold.ttf")}') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+}
+`;
+
 /**
  * Map of subtitle font families to their CSS-safe names.
  * These match the options available in SubtitleModal.jsx.

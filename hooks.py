@@ -23,6 +23,8 @@ def _truncate_bytes(text, max_bytes):
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
 FONT_DIR = "fonts"
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
+# Bundled (SIL OFL, see fonts/Montserrat-OFL.txt): the "pill" look's sans.
+PILL_FONT_PATH = os.path.join(FONT_DIR, "Montserrat-ExtraBold.ttf")
 
 # Codepoint ranges NotoSerif has no glyphs for (would render as tofu boxes).
 _EMOJI_RE = re.compile(
@@ -190,6 +192,10 @@ def download_font_if_needed():
 # Hook visual styles. Each maps to box fill (RGBA, alpha 0 = no box), text
 # color, and an optional text outline (color, px) for box-less looks.
 HOOK_STYLES = {
+    # Default. TikTok-native look: every line its own white rounded box,
+    # black bold sans (Montserrat ExtraBold).
+    "pill":    {"box": (255, 255, 255, 250), "text": (0, 0, 0), "outline": None, "shadow": False,
+                "font": PILL_FONT_PATH, "pills": True},
     # White card, black serif text (original look).
     "classic": {"box": (255, 255, 255, 240), "text": (0, 0, 0), "outline": None, "shadow": True},
     # Dark card, white text.
@@ -205,15 +211,45 @@ HOOK_STYLES = {
 }
 
 
-def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0, style="classic"):
+def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_image_path):
+    """One rounded box per line, stacked and centred (the "pill" style).
+
+    Every box has the same height (from the font's own ascent/descent plus
+    accents), so the stack reads as one block whatever the letters are.
+    """
+    lines = [ln for ln in lines if ln.strip()] or [" "]
+    pad_x = int(font_size * 0.48)
+    pad_y = int(font_size * 0.24)
+    radius = int(font_size * 0.36)
+    probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+    top, bottom = probe.textbbox((0, 0), "ÁÉÍÓÚÑgjpqy", font=font)[1::2]
+    line_h = (bottom - top) + 2 * pad_y
+    widths = [int(_measure_width(probe, ln, font, emoji_font)) for ln in lines]
+    canvas_w = max(widths) + 2 * pad_x + 40
+    canvas_h = line_h * len(lines) + 40
+
+    img = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    for i, (ln, w) in enumerate(zip(lines, widths)):
+        box_w = w + 2 * pad_x
+        x0 = (canvas_w - box_w) // 2
+        y0 = 20 + i * line_h
+        draw.rounded_rectangle([x0, y0, x0 + box_w, y0 + line_h], radius=radius, fill=box_fill)
+        _draw_mixed(img, draw, (x0 + pad_x, y0 + pad_y - top), ln, font, emoji_font,
+                    fill=text_fill, outline=None)
+    img.save(output_image_path)
+    return output_image_path, canvas_w, canvas_h
+
+
+def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0, style="pill"):
     """
     Generates a hook overlay image using pixel-based wrapping.
     target_width: The max width the box should occupy (e.g. 85% of video)
-    style: one of HOOK_STYLES (classic/dark/yellow/red/outline/outline_yellow)
+    style: one of HOOK_STYLES (pill/classic/dark/yellow/red/outline/outline_yellow)
     """
     download_font_if_needed()
 
-    look = HOOK_STYLES.get(style, HOOK_STYLES["classic"])
+    look = HOOK_STYLES.get(style, HOOK_STYLES["pill"])
     box_fill = look["box"]
     text_fill = look["text"]
     outline = look["outline"]
@@ -229,13 +265,17 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     shadow_blur = 10
     
     # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
-    base_font_size = int(target_width * 0.05)
+    pills = bool(look.get("pills"))
+    font_path = look.get("font") or FONT_PATH
+    # The pill sans reads smaller than Noto Serif at the same size: 6.4% of
+    # the box width puts both at the same visual weight.
+    base_font_size = int(target_width * (0.064 if pills else 0.05))
     font_size = int(base_font_size * font_scale)
     
     try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
+        font = ImageFont.truetype(font_path, font_size)
     except Exception as e:
-        print(f"⚠️ Warning: Could not load font {FONT_PATH}, using default. Error: {e}")
+        print(f"⚠️ Warning: Could not load font {font_path}, using default. Error: {e}")
         font = ImageFont.load_default()
 
     # Emoji handling: render with an emoji-capable font if one exists,
@@ -290,6 +330,10 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
 
         if current_line:
             lines.append(' '.join(current_line))
+
+    if pills:
+        return _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill,
+                           output_image_path)
 
     # Recalculate true width/height
     max_line_width = 0
@@ -370,7 +414,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     img.save(output_image_path)
     return output_image_path, canvas_w, canvas_h
 
-def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="classic",
+def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="pill",
                       also=None):
     """
     Overlays text hook onto video.

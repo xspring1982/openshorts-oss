@@ -37,6 +37,7 @@ export type HookPosition = "top" | "center" | "bottom";
 export type HookSize = "S" | "M" | "L";
 export type HookEntrance = "spring" | "fade" | "slide-up" | "none";
 export type HookStyle =
+  | "pill"
   | "classic"
   | "dark"
   | "yellow"
@@ -111,8 +112,8 @@ export const hookConfigSchema = z.object({
   position: z.enum(["top", "center", "bottom"]),
   size: z.enum(["S", "M", "L"]),
   style: z
-    .enum(["classic", "dark", "yellow", "red", "outline", "outline_yellow"])
-    .default("classic"),
+    .enum(["pill", "classic", "dark", "yellow", "red", "outline", "outline_yellow"])
+    .default("pill"),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
   displayDurationSec: z.number().positive(),
 });

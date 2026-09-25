@@ -542,7 +542,7 @@ function App() {
             border_width: options.borderWidth,
             bg_color: options.bgColor,
             bg_opacity: options.bgOpacity,
-            style: options.style || 'classic',
+            style: options.style || 'pill',
             highlight_color: options.highlightColor || '#FFD700',
             effect: options.effect || 'none',
             base_opacity: options.baseOpacity ?? 1.0,
@@ -984,7 +984,7 @@ function App() {
         // Sent explicitly both ways: absent means off for raw API callers,
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
-        auto_hook_style: data.autoHook ? (data.autoHookStyle || 'classic') : null,
+        auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
