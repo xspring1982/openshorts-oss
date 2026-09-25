@@ -802,6 +802,17 @@ def cap_source_duration(input_video, max_minutes, safety=False):
     raise RuntimeError(f"could not cut the source to its first {float(max_minutes):g} minutes")
 
 
+def _content_block(error_text):
+    """User-facing reason when the VIDEO (not the network) can't be fetched."""
+    t = error_text.lower()
+    if "private video" in t:
+        return ("This video is private on YouTube. Set it to Unlisted (or Public) "
+                "and try again, or upload the file instead.")
+    if "members-only" in t or "join this channel" in t:
+        return "This video is for channel members only. Upload the file instead."
+    return None
+
+
 def download_youtube_video(url, output_dir=".", on_audio=None):
     """
     Downloads a YouTube video using yt-dlp.
@@ -1087,6 +1098,14 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 time.sleep(3)
         if sanitized_title is not None:
             break
+        # The video itself is off limits: another route (or the paid proxy)
+        # cannot change that, so stop instead of spending every attempt.
+        if last_err is not None and _content_block(str(last_err)):
+            break
+
+    if sanitized_title is None and last_err is not None and _content_block(str(last_err)):
+        print(f"❌ {_content_block(str(last_err))}")
+        raise last_err
 
     if sanitized_title is None:
         import sys

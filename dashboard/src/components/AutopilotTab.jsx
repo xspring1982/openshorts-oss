@@ -23,6 +23,7 @@ const ERROR_TEXT = {
 
 const REASON_TEXT = {
   youtube_short: 'already a short',
+  private_video: 'private on YouTube — set it to Unlisted to clip it',
   out_of_minutes: 'out of minutes',
   too_short: 'too short to clip',
   unavailable: 'not available yet (private or processing)',
@@ -90,7 +91,6 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
   const [videosError, setVideosError] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [rightsAck, setRightsAck] = useState(false);
   const [running, setRunning] = useState(null);    // video id being submitted
   const [notice, setNotice] = useState('');
   // Feedback for "clip it", shown next to the list: the page-level notice sits
@@ -164,16 +164,12 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
   }, []);
 
   const toggleEnabled = useCallback(async (on) => {
-    if (on && !data?.settings?.rights_ack && !rightsAck) {
-      setNotice('Confirm you own the content of this channel to switch Autopilot on.');
-      return;
-    }
     const s = await save(on ? { enabled: true, rights_ack: true } : { enabled: false });
     if (s) {
       track(on ? 'AutopilotEnabled' : 'AutopilotDisabled', { props: { autopublish: String(!!s.autopublish) } });
       setNotice(on ? 'Autopilot is on. Your next video will be clipped automatically.' : 'Autopilot paused.');
     }
-  }, [data, rightsAck, save]);
+  }, [save]);
 
   const togglePlatform = useCallback((p) => {
     const cur = data?.settings?.publish_platforms || [];
@@ -182,14 +178,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
   }, [data, save]);
 
   const runNow = useCallback(async (video) => {
-    if (!data?.settings?.rights_ack && !rightsAck) {
-      setListNotice('Tick “I own the content…” just above the list first, then clip it again.');
-      return;
-    }
     setRunning(video.id);
     setListNotice('');
     try {
-      if (!data?.settings?.rights_ack) await save({ rights_ack: true });
       const r = await apiJson('/api/autopilot/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -205,7 +196,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
       setRunning(null);
       load();
     }
-  }, [data, rightsAck, save, load]);
+  }, [load]);
 
   const openProject = useCallback(async (jobId) => {
     if (!onOpenProject || opening) return;
@@ -308,18 +299,6 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             onChange={toggleEnabled}
           />
         </div>
-
-        {!s.rights_ack && (
-          <label className="flex items-start gap-3 mt-5 text-sm text-ink2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={rightsAck}
-              onChange={(e) => setRightsAck(e.target.checked)}
-              className="mt-0.5 accent-[var(--color-accent)]"
-            />
-            <span>I own the content published on this channel, or have the rights to process it.</span>
-          </label>
-        )}
 
         {errorText && (
           <p className="text-warn text-sm mt-4 flex items-center gap-2"><AlertTriangle size={14} /> {errorText}</p>
@@ -433,18 +412,6 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             </div>
             <button onClick={load} className="btn-quiet text-xs" aria-label="refresh"><RefreshCw size={13} /> refresh</button>
           </div>
-
-          {!s.rights_ack && (
-            <label className="flex items-start gap-3 mb-4 text-sm text-ink2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rightsAck}
-                onChange={(e) => { setRightsAck(e.target.checked); setListNotice(''); }}
-                className="mt-0.5 accent-[var(--color-accent)]"
-              />
-              <span>I own the content published on this channel, or have the rights to process it.</span>
-            </label>
-          )}
           {listNotice && (
             <div className="mb-4 rounded-card border border-brass/40 bg-brass/5 px-4 py-3 text-sm text-ink2" role="status">{listNotice}</div>
           )}
