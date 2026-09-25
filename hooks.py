@@ -26,6 +26,15 @@ FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
 # Bundled (SIL OFL, see fonts/Montserrat-OFL.txt): the "pill" look's sans.
 PILL_FONT_PATH = os.path.join(FONT_DIR, "Montserrat-ExtraBold.ttf")
 
+# Typefaces the hook editor offers, all bundled so the server render and the
+# browser preview use the same file. The size factor (share of the box width)
+# evens out their visual weight: Anton is condensed, Montserrat wide.
+HOOK_FONTS = {
+    "montserrat": (PILL_FONT_PATH, 0.064),
+    "anton": (os.path.join(FONT_DIR, "Anton-Regular.ttf"), 0.08),
+    "serif": (FONT_PATH, 0.05),
+}
+
 # Codepoint ranges NotoSerif has no glyphs for (would render as tofu boxes).
 _EMOJI_RE = re.compile(
     "["
@@ -241,7 +250,8 @@ def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_
     return output_image_path, canvas_w, canvas_h
 
 
-def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0, style="pill"):
+def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0, style="pill",
+                      font=None):
     """
     Generates a hook overlay image using pixel-based wrapping.
     target_width: The max width the box should occupy (e.g. 85% of video)
@@ -266,10 +276,11 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     
     # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
     pills = bool(look.get("pills"))
-    font_path = look.get("font") or FONT_PATH
-    # The pill sans reads smaller than Noto Serif at the same size: 6.4% of
-    # the box width puts both at the same visual weight.
-    base_font_size = int(target_width * (0.064 if pills else 0.05))
+    # A chosen typeface (HOOK_FONTS key) wins; otherwise the style's own
+    # (pill -> Montserrat, the rest -> Noto Serif, as they always rendered).
+    default_font = "montserrat" if look.get("font") == PILL_FONT_PATH else "serif"
+    font_path, size_factor = HOOK_FONTS.get(font or default_font, HOOK_FONTS[default_font])
+    base_font_size = int(target_width * size_factor)
     font_size = int(base_font_size * font_scale)
     
     try:
@@ -415,7 +426,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     return output_image_path, canvas_w, canvas_h
 
 def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="pill",
-                      also=None):
+                      also=None, font=None):
     """
     Overlays text hook onto video.
     position: 'top', 'center', 'bottom'
@@ -456,7 +467,8 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
                      f"{_truncate_bytes(stem, 80)}.png")
     
     try:
-        img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale, style=style)
+        img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale, style=style,
+                                                       font=font)
         
         # 3. Calculate Overlay Position
         overlay_x = (video_width - box_w) // 2

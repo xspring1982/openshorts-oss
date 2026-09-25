@@ -45,11 +45,15 @@ export type HookStyle =
   | "outline"
   | "outline_yellow";
 
+export type HookFont = "montserrat" | "anton" | "serif";
+
 export interface HookConfig {
   text: string;
   position: HookPosition;
   size: HookSize;
   style?: HookStyle;
+  /** montserrat | anton | serif; unset = the style's own typeface. */
+  font?: HookFont;
   entranceAnimation: HookEntrance;
   displayDurationSec: number;
 }
@@ -114,6 +118,7 @@ export const hookConfigSchema = z.object({
   style: z
     .enum(["pill", "classic", "dark", "yellow", "red", "outline", "outline_yellow"])
     .default("pill"),
+  font: z.enum(["montserrat", "anton", "serif"]).optional(),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
   displayDurationSec: z.number().positive(),
 });

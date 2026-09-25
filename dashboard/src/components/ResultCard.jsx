@@ -539,7 +539,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     text: payload.text,
                     position: payload.position,
                     size: payload.size,
-                    style: payload.style || 'classic',
+                    style: payload.style || 'pill',
+                    font: payload.font || null,
                     duration_seconds: payload.remotion?.displayDurationSec ?? null,
                     input_filename: serverVideoFile
                 })
@@ -956,7 +957,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         className={QUIET_BTN}
                     >
                         {isHooking ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isHooking ? 'adding…' : 'viral hook'}
+                        {isHooking ? 'saving…' : 'edit hook'}
                     </button>
 
                     <button

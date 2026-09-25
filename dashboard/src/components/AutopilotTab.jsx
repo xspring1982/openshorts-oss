@@ -424,8 +424,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
           <div className="divide-y divide-rule">
             {(videos || []).map((v) => {
               const run = v.run;
-              const canRun = eligible && (!run || run.status === 'failed'
-                || (run.status === 'skipped' && run.reason !== 'youtube_short'));
+              // Skipped runs can be retried too: private videos used to be
+              // misread as Shorts, and a real Short just skips again.
+              const canRun = eligible && (!run || run.status === 'failed' || run.status === 'skipped');
               return (
                 <div key={v.id} className="flex items-center gap-3 py-3">
                   {v.thumbnail_url ? (

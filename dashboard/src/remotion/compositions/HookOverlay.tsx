@@ -10,9 +10,9 @@ import {
 import type { HookConfig } from "../lib/types";
 import {
   notoSerifFontFace,
-  NOTO_SERIF_FONT_FAMILY,
   montserratFontFace,
-  MONTSERRAT_FONT_FAMILY,
+  antonFontFace,
+  HOOK_FONTS,
 } from "../lib/fonts";
 
 interface HookOverlayProps {
@@ -59,7 +59,7 @@ export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
 
   return (
     <AbsoluteFill>
-      <style>{notoSerifFontFace + montserratFontFace}</style>
+      <style>{notoSerifFontFace + montserratFontFace + antonFontFace}</style>
       <Sequence from={0} durationInFrames={displayFrames} layout="none">
         <HookBox config={config} displayFrames={displayFrames} />
       </Sequence>
@@ -127,9 +127,10 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   const positionStyle = POSITION_STYLE[config.position] ?? POSITION_STYLE.top;
   const look = HOOK_LOOKS[config.style ?? "pill"] ?? HOOK_LOOKS.pill;
 
-  // Base font size: 5% (serif) / 6.4% (pill sans) of the 90% box, as hooks.py.
-  const baseFontSize = 1080 * 0.9 * (look.pills ? 0.064 : 0.05 / 0.9);
-  const fontSize = Math.round(baseFontSize * scale);
+  // Typeface and size as hooks.py: the chosen font, else the style's own;
+  // font size = factor x the 90%-of-width box.
+  const typeface = HOOK_FONTS[config.font ?? (look.pills ? "montserrat" : "serif")] ?? HOOK_FONTS.serif;
+  const fontSize = Math.round(1080 * 0.9 * typeface.factor * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
 
   if (look.pills) {
@@ -157,9 +158,9 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
         >
           <span
             style={{
-              fontFamily: `'${MONTSERRAT_FONT_FAMILY}', 'Montserrat', sans-serif`,
+              fontFamily: typeface.family,
               fontSize,
-              fontWeight: 800,
+              fontWeight: typeface.weight,
               color: look.text,
               backgroundColor: look.box ?? "transparent",
               padding: `${Math.round(fontSize * 0.2)}px ${Math.round(fontSize * 0.48)}px`,
@@ -201,9 +202,9 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
       >
         <span
           style={{
-            fontFamily: `'${NOTO_SERIF_FONT_FAMILY}', 'Noto Serif', Georgia, serif`,
+            fontFamily: typeface.family,
             fontSize,
-            fontWeight: 700,
+            fontWeight: typeface.weight,
             color: look.text,
             lineHeight: 1.4,
             wordBreak: "break-word",
