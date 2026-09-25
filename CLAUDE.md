@@ -519,12 +519,29 @@ real videos, bench of 25-sep-2026):
 - **A seek per sampled frame** in `analyze_scenes_strategy` and
   `split_layout`: each seek re-decoded the GOP. `frame_sampler.read_at`
   reads forward once and returns the same frames.
-Net: a job's CPU roughly halves (Python side -65-80%). What is left is
-ffmpeg decode/filter/encode per pass; any change there (NVDEC decode, a
-cheaper blur, fusing the watermark/hook/caption passes) changes the output
-pixels, so it needs a decision, not just a benchmark. `NVDEC` + a
-quarter-size blur were shipped and reverted on 25-sep-2026 for that reason
-(SSIM 0.998, not identical).
+Net: a job's CPU roughly halves (Python side -65-80%).
+
+Then speed at equal quality (Victor, 25-sep-2026: "optimizar al máximo la
+velocidad sin afectar la calidad"; SSIM 0.990-0.9998 vs before, checked by
+eye, audio identical):
+- **Cut on the card** (`ffmpeg_utils.cut_clip`, NVDEC -> NVENC with
+  `-hwaccel_output_format cuda`) for 8-bit 4:2:0 sources; byte-identical to
+  the CPU cut. Other sources and a failed GPU cut decode on the CPU.
+- **Silero VAD on one CPU thread** (`vad_load_kwargs`): on CUDA it ran one
+  32 ms chunk per launch and was most of the transcription's wall time.
+- **Blur at quarter size** (`ffmpeg_utils.blurred_backdrop`).
+- **Watermark inside the reframe encode** (`reframe_v2.render(watermark=)`),
+  not a pass of its own (~97% of jobs are free plan).
+- **hooked_ + subtitled_ from one ffmpeg** (`hooks.add_hook_to_video(also=)`):
+  the editor still needs both files (re-caption walks back to hooked_,
+  hook replace to the canonical), so nothing is skipped, only one decode.
+- **CLIP_WORKERS=6** by default.
+Tried and dropped: NVDEC for the analysis decodes and `scale_cuda` (slower in
+wall, and scale_cuda does not match swscale); yt-dlp chunking/concurrent
+fragments (YouTube serves DASH over https, no gain beyond network noise).
+The bench that measured all this lives on balrog in /root/osbench (see the
+harness docstring): Gemini decisions recorded once and replayed, old and new
+code run side by side, clips compared by decoded-frame MD5 / SSIM.
 
 Three guards keep the card from filling (22-sep-2026: 30-60% of jobs failing
 per hour at peak with `MAX_CONCURRENT_JOBS=8`):
