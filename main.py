@@ -2382,6 +2382,8 @@ if __name__ == '__main__':
                     # dict, so the re-dump after the pool is race-free.
                     success = render_clip(clip_temp_path, clip_final_path, output_format,
                                           watermark=os.environ.get("WATERMARK") == "1")
+                    if success:
+                        print(f"   🎞️ Clip {i+1} framed")
                     deliver_path = clip_final_path
                     # Which stretches were stacked (SPLIT): captions go on the
                     # seam there, and /api/subtitle needs it again later.

@@ -866,7 +866,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
                 {/* Descriptions (compact) — full text lives in the modal */}
                 <div className="flex-1 min-h-0 space-y-2 mb-4">
-                    <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0">
+                    <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">YOUTUBE</span>
                         <p className="text-xs text-ink2 truncate flex-1 min-w-0">
                             {clip.video_title_for_youtube_short || "Viral Short Video"}
@@ -880,7 +880,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         </button>
                     </div>
 
-                    <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0">
+                    <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">TIKTOK · IG</span>
                         <p className="text-xs text-ink2 truncate flex-1 min-w-0">
                             {clip.video_description_for_tiktok || clip.video_description_for_instagram}
@@ -911,7 +911,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 )}
 
                 {/* Actions Footer */}
-                <div className="grid grid-cols-2 gap-2 mt-auto pt-4 border-t border-rule">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-2 mt-auto pt-4 border-t border-rule">
                     {onEditClip && (
                         <button
                             onClick={() => onEditClip(index)}

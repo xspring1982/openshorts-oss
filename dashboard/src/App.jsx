@@ -346,6 +346,8 @@ function App() {
   // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
   const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
+  // When each server log line arrived (epoch s, parallel to logs), from /api/status.
+  const [logTimes, setLogTimes] = useState([]);
   // Collapsed on phones: the log tail is the least useful thing on a 360px
   // screen and it was pushing the actual clips a full scroll down.
   const [logsVisible, setLogsVisible] = useState(() => {
@@ -509,6 +511,7 @@ function App() {
     setJobId(data.job_id);
     setResults(data.result || null);
     setLogs(['♻️ Project restored from your library.']);
+    setLogTimes([Date.now() / 1000]);
     setProcessingMedia(null);
     setQualityGate(null);
     setStatus('complete');
@@ -751,7 +754,10 @@ function App() {
             refreshMe();
           } else {
             // Update logs if available
-            if (data.logs) setLogs(data.logs);
+            if (data.logs) {
+              setLogs(data.logs);
+              setLogTimes(data.log_times || []);
+            }
           }
         } catch (e) {
           console.error("Polling error", e);
@@ -953,6 +959,7 @@ function App() {
     setStatus('processing');
     setJobError('');
     setLogs(["Starting process..."]);
+    setLogTimes([Date.now() / 1000]);
     setResults(null);
     // Studio handovers have no local media object; the preview switches to the
     // backend-served source once the job id is known.
@@ -1100,6 +1107,7 @@ function App() {
     setJobId(null);
     setResults(null);
     setLogs([]);
+    setLogTimes([]);
     setProcessingMedia(null);
     setProjectState(null);
     setNoSource(false);
@@ -2030,7 +2038,9 @@ function App() {
                     <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
                       {logs.map((log, i) => (
                         <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date().toLocaleTimeString()}</span>
+                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
+                            {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
+                          </span>
                           <span className="min-w-0 break-words">{log}</span>
                         </div>
                       ))}
@@ -2167,7 +2177,7 @@ function App() {
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (
-                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
+                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,600px),1fr))]' : 'grid-cols-1'}`}>
                       {rankedClips.map(({ clip, index: i }) => (
                         <ResultCard
                           key={`${jobId}-${i}-${clip.video_url || ''}`}

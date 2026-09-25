@@ -791,7 +791,7 @@ def _recover_jobs_from_disk():
                 owner = int(raw) if raw.isdigit() else (raw or None)
             jobs[job_id] = {
                 'status': 'completed',
-                'logs': ["♻️ Job recovered from disk after server restart."],
+                'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
                 'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
@@ -1225,7 +1225,7 @@ def _resume_interrupted_jobs() -> set:
 
         jobs[job_id] = {
             'status': 'queued',
-            'logs': [f"♻️ Resuming your video after a server update (attempt {attempts})."],
+            'logs': _TimedLog([f"♻️ Resuming your video after a server update (attempt {attempts})."]),
             'cmd': m.get("cmd"),
             'env': env,
             'output_dir': job_path,
@@ -2221,6 +2221,39 @@ _SENSITIVE_LOG_RE = re.compile(
 )
 
 
+class _TimedLog(list):
+    """A job's log lines plus the time each one arrived (``.times``).
+
+    The dashboard used to stamp every line with the time it was RENDERED, so
+    all of them showed the same clock and it changed on every poll.
+    """
+
+    def __init__(self, lines=()):
+        super().__init__(lines)
+        self.times = [time.time()] * len(self)
+
+    def append(self, line):
+        super().append(line)
+        self.times.append(time.time())
+
+    def extend(self, lines):
+        lines = list(lines)
+        super().extend(lines)
+        self.times.extend([time.time()] * len(lines))
+
+
+def _visible_logs_timed(logs):
+    """(lines, times) to surface to the client; see _visible_logs."""
+    times = getattr(logs, "times", None)
+    if times is not None and len(times) != len(logs):
+        times = None
+    if not BILLING_ENABLED or DEBUG_LOGS:
+        return list(logs), list(times) if times is not None else None
+    from log_view import friendly_logs_timed
+    pairs = friendly_logs_timed(logs, times)
+    return [p[0] for p in pairs], ([p[1] for p in pairs] if times is not None else None)
+
+
 def _visible_logs(logs):
     """Logs to surface to the client.
 
@@ -3050,7 +3083,7 @@ async def process_endpoint(
     # Enqueue Job
     jobs[job_id] = {
         'status': 'queued',
-        'logs': [f"Job {job_id} queued."],
+        'logs': _TimedLog([f"Job {job_id} queued."]),
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,
@@ -3109,7 +3142,7 @@ def _job_view_from_disk(job_id):
     owner = m.get("user_id")
     return {
         'status': 'processing' if alive else 'queued',
-        'logs': ["♻️ The server was updated; your video continues on the new instance."],
+        'logs': _TimedLog(["♻️ The server was updated; your video continues on the new instance."]),
         'user_id': (int(owner) if isinstance(owner, str) and owner.isdigit() else owner),
         'result': None,
     }
@@ -3134,9 +3167,12 @@ async def get_status(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
 
     await _assert_job_owner(request, job)
+    _logs_view = _visible_logs_timed(job['logs'])
     return {
         "status": _presented_status(job_id, job),
-        "logs": _visible_logs(job['logs']),
+        "logs": _logs_view[0],
+        # When each line arrived (epoch seconds, parallel to "logs"), or None.
+        "log_times": _logs_view[1],
         "result": job.get('result'),
         # Position in line and a rough wait while the job is still queued.
         "queue": queue_snapshot(job_id),
@@ -3436,7 +3472,7 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
                     f"{_canonical_clip_file(job_dir, base_name, i)}")
         jobs[job_id] = {
             'status': 'completed',
-            'logs': ["♻️ Project restored from your library."],
+            'logs': _TimedLog(["♻️ Project restored from your library."]),
             'output_dir': job_dir,
             'user_id': user_id,
             'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
@@ -6690,7 +6726,7 @@ async def saasshorts_generate(
             saas_jobs[job_id] = {
                 "user_id": await _owner_id(request),
                 "status": "processing",
-                "logs": [f"Retrying job {job_id[:8]}... reusing cached assets from disk."],
+                "logs": _TimedLog([f"Retrying job {job_id[:8]}... reusing cached assets from disk."]),
                 "result": None,
                 "output_dir": job_output_dir,
             }
@@ -6702,7 +6738,7 @@ async def saasshorts_generate(
         saas_jobs[job_id] = {
             "user_id": await _owner_id(request),
             "status": "processing",
-            "logs": ["SaaSShorts job started."],
+            "logs": _TimedLog(["SaaSShorts job started."]),
             "result": None,
             "output_dir": job_output_dir,
         }
