@@ -178,7 +178,11 @@ else:
 
 # The free queue's saturation mode (lanes, newest first, brake). Plain policy
 # with no dependencies, importable with billing off; inert unless configured.
-from cloud import queue_mode as _queue_mode
+# Fork: cloud/ is not shipped (not MIT), so fall back to an inert stand-in.
+try:
+    from cloud import queue_mode as _queue_mode
+except ImportError:
+    import queue_mode_off as _queue_mode
 
 
 def _saturation_on() -> bool:
@@ -928,13 +932,18 @@ async def _assert_job_owner(request, record):
 # Who the caller of a GET is, remembered per credential for the owner check
 # alone, with a cap on how many of those lookups hold a pool connection at once
 # (cloud/owner_cache.py). A ban, a revoked key or an erased account forgets it.
-from cloud import owner_cache as _owner_cache
+# Fork: optional, since cloud/ is not shipped; without it every lookup goes
+# straight to _user_from_request.
+try:
+    from cloud import owner_cache as _owner_cache
+except ImportError:
+    _owner_cache = None
 
 
 async def _owner_id_from_request(request):
     credential = (request.headers.get("Authorization", "")
                   + "\n" + request.headers.get("X-API-Key", ""))
-    if request.method != "GET" or not credential.strip():
+    if request.method != "GET" or not credential.strip() or _owner_cache is None:
         user = await _user_from_request(request)
         return str(user.id) if user is not None else None
     try:

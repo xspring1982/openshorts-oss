@@ -31,7 +31,50 @@ import pytest  # noqa: E402
 def _fresh_owner_cache():
     """The owner check remembers callers per credential (cloud/owner_cache.py);
     a caller one test remembered must not answer for the next."""
-    from cloud import owner_cache
+    try:
+        from cloud import owner_cache
+    except ImportError:  # this fork ships without cloud/
+        yield
+        return
     owner_cache.clear()
     yield
     owner_cache.clear()
+
+
+# ---- Fork: the suite without cloud/ ------------------------------------------
+# This fork does not ship upstream's cloud/ package (it is not under the MIT
+# license). Test files that import it at module level are not collected, and
+# a test that reaches for it at run time is reported as skipped, not failed.
+import importlib.util  # noqa: E402
+import re  # noqa: E402
+
+HAVE_CLOUD = importlib.util.find_spec("cloud") is not None
+_TOP_LEVEL_CLOUD = re.compile(r"^(from cloud\b|import cloud\b)", re.M)
+
+collect_ignore = []
+if not HAVE_CLOUD:
+    _here = os.path.dirname(os.path.abspath(__file__))
+    for _name in sorted(os.listdir(_here)):
+        if _name.startswith("test_") and _name.endswith(".py"):
+            with open(os.path.join(_here, _name), encoding="utf-8") as _f:
+                if _TOP_LEVEL_CLOUD.search(_f.read()):
+                    collect_ignore.append(_name)
+
+
+def _needs_cloud(excinfo) -> bool:
+    exc = excinfo.value if excinfo else None
+    while exc is not None:
+        if isinstance(exc, ModuleNotFoundError) and (exc.name or "").split(".")[0] == "cloud":
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if not HAVE_CLOUD and report.failed and _needs_cloud(call.excinfo):
+        report.outcome = "skipped"
+        report.longrepr = (str(item.path), item.location[1] or 0,
+                           "Skipped: needs upstream's cloud/ package (not in this fork)")
