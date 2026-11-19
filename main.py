@@ -30,6 +30,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import audio_first
 import output_aspect
 import usage_meter
 import yt_account
@@ -2723,6 +2724,9 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--audio-first', action='store_true',
+                        help="YouTube links: fetch the audio, pick the moments, then fetch only "
+                             "those ranges of the video (same as AUDIO_FIRST=1; audio_first.py).")
     parser.add_argument('--aspect', type=str, default=None,
                         help="Output frame for reframed clips: 9:16 (default), 4:5, 1:1, 16:9 "
                              "or any W:H (same as OUTPUT_ASPECT; output_aspect.py).")
@@ -2810,6 +2814,7 @@ if __name__ == '__main__':
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
 
     # 1. Get Input Video
+    af = None  # fork: what the audio-first fetch made (audio_first.Result)
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
         # For whole-video runs (--skip-analysis), --output can be a file path.
@@ -2859,13 +2864,30 @@ if __name__ == '__main__':
             threading.Thread(target=_early_work, args=(audio_path, audio_duration),
                              daemon=True).start()
 
-        use_early = (not args.skip_analysis and not args.transcript
+        # Fork: audio first, then only the picked ranges (audio_first.py).
+        # Not with a cap on the source minutes (that cuts the downloaded
+        # file), a checkpoint, or a given transcript or picks.
+        if (audio_first.enabled(args.audio_first) and is_youtube_url(args.url)
+                and not args.skip_analysis and not args.prepare_only
+                and not args.transcript and not args.clips
+                and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
+                and not os.environ.get("SOURCE_CAP_MINUTES", "").strip()
+                and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT))):
+            af = audio_first.fetch(
+                args.url, output_dir, transcribe=transcribe_video,
+                pick=lambda t, d: get_viral_clips(t, d, viewer_clips=viewer_clips),
+                sparse=speech_is_sparse)
+        use_early = (af is None
+                     and not args.skip_analysis and not args.transcript
                      and not args.prepare_only
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
+        if af is not None and af.source:
+            input_video, video_title = af.source, sanitize_filename(af.title)
+        else:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2975,6 +2997,8 @@ if __name__ == '__main__':
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = frame_count / fps
         cap.release()
+        if af is not None and af.source:
+            duration = af.duration  # the file holds only the picked ranges
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -2994,6 +3018,10 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"⚠️ Could not use precomputed transcript ({e}) — transcribing normally.")
                 transcript = None
+        if transcript is None and af is not None and af.transcript is not None:
+            transcript = af.transcript
+            print(f"♻️ Using the transcript made from the audio track "
+                  f"({len(transcript['segments'])} segments).")
         early_state = globals().get("early")
         if transcript is None and early_state is not None:
             with early_state["lock"]:
@@ -3045,6 +3073,9 @@ if __name__ == '__main__':
                 clips_data = json.load(_f)
             clips_data.pop('transcript', None)
             print(f"⏩ Reusing {len(clips_data.get('shorts') or [])} precomputed clips.")
+        elif af is not None and af.clips and transcript is af.transcript:
+            print("♻️ Using the clips picked from the audio track.")
+            clips_data = af.clips
         elif (transcript is not None and early_clips
                 and transcript is early_state["transcript"]):
             print("♻️ Using the clips Gemini picked while the video downloaded.")
@@ -3070,7 +3101,11 @@ if __name__ == '__main__':
             # again and reproduce the render settings, so record both. The
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
-            clips_data['source_video'] = os.path.basename(input_video)
+            # Fork: an audio-first job holds only the picked ranges, which the
+            # editor's re-render cannot use; without the name it reports the
+            # source as gone (409) instead of cutting the wrong part.
+            if not (af is not None and af.source):
+                clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
@@ -3098,7 +3133,11 @@ if __name__ == '__main__':
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                    # Fork: an audio-first job cuts from the fetched range
+                    # that holds the clip (audio_first.section_for).
+                    _src, _off = audio_first.section_for(
+                        af.sections if af is not None else None, input_video, start, end)
+                    cut_clip(_src, clip_temp_path, start - _off, end - _off, i + 1)
 
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
