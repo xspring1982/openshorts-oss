@@ -2158,6 +2158,26 @@ def transcribe_video(video_path, slot_timeout=None):
 
     return transcript
 
+def gemini_max_attempts() -> int:
+    """GEMINI_MAX_ATTEMPTS (default 8): tries per Gemini stage call."""
+    try:
+        return max(1, int(os.environ.get("GEMINI_MAX_ATTEMPTS", "8")))
+    except ValueError:
+        return 8
+
+
+def gemini_models(model_name):
+    """The model, then GEMINI_FALLBACK_MODELS (comma-separated; default
+    gemini-flash-lite-latest, "none" for no fallback), without repeats."""
+    raw = os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-flash-lite-latest")
+    extra = [] if raw.strip().lower() == "none" else [m.strip() for m in raw.split(",")]
+    out = [model_name]
+    for m in extra:
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
@@ -2172,12 +2192,17 @@ def _run_gemini_stage(client, model_name, prompt, schema):
         response_mime_type="application/json",
         response_schema=schema,
     )
-    max_attempts = 3
+    # Gemini overload ("503 high demand") can last minutes: retry for up to
+    # about three minutes and alternate with GEMINI_FALLBACK_MODELS on each
+    # transient error (fork addition).
+    max_attempts = gemini_max_attempts()
+    models = [model_name] if use_local else gemini_models(model_name)
     for attempt in range(1, max_attempts + 1):
         try:
             if use_local:
                 return llm_backend.generate_json(prompt, schema, model=model_name)
-            response = client.models.generate_content(model=model_name, contents=prompt, config=config)
+            model_now = models[(attempt - 1) % len(models)]
+            response = client.models.generate_content(model=model_now, contents=prompt, config=config)
             # Policy blocks are deterministic — retrying only burns quota and
             # time, and the user deserves the real reason instead of a generic
             # "empty response" (prod 23-jul: PROHIBITED_CONTENT on every try).
@@ -2192,7 +2217,7 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             else:
                 parsed = gemini_worker._parse_json_response_text(
                     gemini_worker._get_response_text(response))
-            return parsed, gemini_worker._calculate_cost_analysis(response, model_name)
+            return parsed, gemini_worker._calculate_cost_analysis(response, model_now)
         except gemini_worker.GeminiBlockedError:
             raise  # deterministic policy block — never retry
         except Exception as e:
@@ -2208,7 +2233,7 @@ def _run_gemini_stage(client, model_name, prompt, schema):
                 'validation error'))
             if attempt == max_attempts or not transient:
                 raise
-            wait = 5 * (2 ** (attempt - 1))
+            wait = min(40, 5 * (2 ** (attempt - 1)))
             who = "LLM server" if use_local else "Gemini"
             print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
             time.sleep(wait)

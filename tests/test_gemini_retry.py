@@ -61,12 +61,41 @@ def test_recovers_from_two_consecutive_blips():
     assert parsed["windows"]
 
 
-def test_gives_up_after_three_attempts():
+def test_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setenv("GEMINI_MAX_ATTEMPTS", "3")
     models = _FakeModels(blips=99)
     with pytest.raises(Exception) as exc:
         main._run_gemini_stage(_client(models), "m", "prompt", object)
     assert models.calls == 3
     assert "empty response body" in str(exc.value)
+
+
+def test_default_is_eight_attempts(monkeypatch):
+    monkeypatch.delenv("GEMINI_MAX_ATTEMPTS", raising=False)
+    models = _FakeModels(blips=99)
+    with pytest.raises(Exception):
+        main._run_gemini_stage(_client(models), "m", "prompt", object)
+    assert models.calls == 8
+
+
+def test_transient_errors_alternate_with_the_fallback_model(monkeypatch):
+    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "backup-1, backup-2")
+    seen = []
+
+    class _Models(_FakeModels):
+        def generate_content(self, **kwargs):
+            seen.append(kwargs["model"])
+            return super().generate_content(**kwargs)
+
+    main._run_gemini_stage(_client(_Models(blips=3)), "main-model", "prompt", object)
+    assert seen == ["main-model", "backup-1", "backup-2", "main-model"]
+
+
+def test_fallback_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "none")
+    assert main.gemini_models("m") == ["m"]
+    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "m,x,x")
+    assert main.gemini_models("m") == ["m", "x"]
 
 
 def test_non_transient_errors_are_not_retried():
