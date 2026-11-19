@@ -6,6 +6,7 @@ import sys
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
                           METADATA_SCRUB, finished_before_crash)
 import gpu_decode
+import output_aspect
 
 
 _STDIO_CONFIGURED = False
@@ -234,7 +235,7 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
 # and Reels' own bottom UI — the caption/username block and the music ticker —
 # where they were partly covered on the platform even though the exported file
 # looked fine.
-SAFE_MARGIN_V = 43
+SAFE_MARGIN_V = output_aspect.caption_margin_v()  # 43 for 9:16
 
 
 # The caption look applied automatically to every generated clip. Chosen by
@@ -326,7 +327,7 @@ _FONT_FILES = {"Anton": "Anton-Regular.ttf", "Impact": "Anton-Regular.ttf",
                "Montserrat ExtraBold": "Montserrat-ExtraBold.ttf"}
 # PlayResX that libass derives for a 9:16 frame from PlayResY 288, minus the
 # style's MarginL + MarginR (10 each).
-_LINE_UNITS = 288 * 9 / 16 - 20
+_LINE_UNITS = output_aspect.caption_line_units()  # 288 * 9 / 16 - 20 for 9:16
 _font_metrics = {}
 
 

@@ -30,6 +30,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import output_aspect
 import yt_account
 import twitch_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
@@ -50,7 +51,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf'
 load_dotenv()
 
 # --- Constants ---
-ASPECT_RATIO = 9 / 16
+# 9:16 unless OUTPUT_ASPECT / --aspect asks for another ratio (output_aspect.py).
+ASPECT_RATIO = output_aspect.ratio()
 
 GEMINI_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
@@ -2714,6 +2716,12 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--aspect', type=str, default=None,
+                        help="Output frame for reframed clips: 9:16 (default), 4:5, 1:1, 16:9 "
+                             "or any W:H (same as OUTPUT_ASPECT; output_aspect.py).")
+    parser.add_argument('--clips', type=str, default=None,
+                        help="Reuse the picks of an earlier run (its *_metadata.json, or any "
+                             "JSON with a 'shorts' list) instead of asking the LLM again.")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
     parser.add_argument('--prepare-only', action='store_true',
@@ -3023,7 +3031,12 @@ if __name__ == '__main__':
 
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
         early_clips = (early_state or {}).get("clips") if early_state else None
-        if (transcript is not None and early_clips
+        if args.clips:
+            with open(args.clips) as _f:
+                clips_data = json.load(_f)
+            clips_data.pop('transcript', None)
+            print(f"⏩ Reusing {len(clips_data.get('shorts') or [])} precomputed clips.")
+        elif (transcript is not None and early_clips
                 and transcript is early_state["transcript"]):
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips

@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, finished_before_crash
 import gpu_decode
+import output_aspect
 
 
 def _truncate_bytes(text, max_bytes):
@@ -525,7 +526,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         
     # 2. Generate Image
     # Box check: Don't let it be wider than 90% of screen
-    target_box_width = int(video_width * 0.9)
+    target_box_width = int(video_width * output_aspect.hook_width())  # 0.9 for 9:16
     
     # Unique per invocation so parallel jobs can't overwrite each other's overlay.
     # The uuid alone guarantees that; the source name rides along only as a
