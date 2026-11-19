@@ -1,10 +1,10 @@
-OpenShorts (fork with the openshorts.io pipeline improvements)
+OpenShorts.io open source repository (a fork of OpenShorts by mutonby)
 
 OpenShorts: Copyright (c) 2024 OpenShorts (mutonby and contributors),
 https://github.com/mutonby/openshorts, licensed under the MIT License
 (see LICENSE).
 
-Fork changes: Copyright (c) 2026 the openshorts.io team, also licensed under
+Fork changes: Copyright (c) 2026 the OpenShorts.io team, also licensed under
 the MIT License.
 
 Upstream's "cloud/" directory is licensed under the OpenShorts Commercial

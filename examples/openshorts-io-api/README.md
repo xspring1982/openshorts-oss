@@ -1,7 +1,7 @@
-# Calling the hosted openshorts.io API
+# Calling the hosted OpenShorts.io API
 
 If you don't want to deploy the runner yourself, the hosted version at
-[openshorts.io](https://openshorts.io) accepts video links over an
+[OpenShorts.io](https://openshorts.io) accepts video links over an
 [MCP](https://modelcontextprotocol.io) endpoint. You can use it from an AI
 client such as Claude, Cursor or ChatGPT, or call it directly as JSON-RPC over
 HTTP from your own code, as these examples do.

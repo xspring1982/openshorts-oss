@@ -1,4 +1,4 @@
-"""Clip a video with the hosted openshorts.io MCP endpoint (standard library only).
+"""Clip a video with the hosted OpenShorts.io MCP endpoint (standard library only).
 
     export OPENSHORTS_API_KEY=os_...
     python clip_video.py "https://www.youtube.com/watch?v=..." [--aspect 4:5] [--style hormozi]

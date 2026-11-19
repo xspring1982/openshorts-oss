@@ -53,7 +53,7 @@ are billed), and the names `OSGPU_APP`, `OSGPU_SECRET`, `OSGPU_VOLUME`,
 ## Measured costs (November 2026)
 
 The first row was measured with this repository's Modal backend; the others
-were measured by the hosted service openshorts.io on the same pipeline, all
+were measured by the hosted service OpenShorts.io on the same pipeline, all
 with an L4 or A10 container (4 physical cores, 16 GiB) and `CLIP_WORKERS=3`. Wall time
 runs from the call to the result and includes the cold start. Cost is wall
 time multiplied by the container's list price, an upper bound.
@@ -73,7 +73,7 @@ time multiplied by the container's list price, an upper bound.
 - Render time is about 60 s fixed plus about 10 s per clip, almost independent
   of the source length. On 4 shared vCPUs the same pipeline needed 45–60
   minutes for a 10-minute source.
-- **The openshorts.io figures exclude transcription**, which ran on Groq's
+- **The OpenShorts.io figures exclude transcription**, which ran on Groq's
   API there. The first row was measured with this repository and includes
   Whisper `large-v3-turbo` on the GPU, the download of the source and the
   first call on a freshly built image. Put `GROQ_API_KEY` in the

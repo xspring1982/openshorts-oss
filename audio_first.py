@@ -19,7 +19,7 @@ Whenever a step cannot be done (no DASH stream, a refused range, speech too
 thin to pick from the transcript), ``fetch`` says so and main.py downloads
 the whole video as usual, keeping the transcript and picks already made.
 
-On openshorts.io (same code, November 2026, through a proxy) a 20-minute
+On OpenShorts.io (same code, November 2026, through a proxy) a 20-minute
 720p60 video took 12 min 17 s to download whole; the first two audio-first
 jobs after the switch fetched what they needed in 98 s and 182 s.
 

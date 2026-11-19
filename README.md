@@ -1,14 +1,17 @@
-# OpenShorts, with the openshorts.io pipeline improvements
+# OpenShorts.io — open source AI video clipper
 
 Turn long videos (podcasts, talks, interviews, streams) into vertical short
 clips with face tracking, animated captions and a hook line, on your own
 machine or on serverless GPUs.
 
-This is a maintained fork of [OpenShorts](https://github.com/mutonby/openshorts)
-by mutonby, which is MIT-licensed. It keeps the whole upstream application:
+This is the OpenShorts.io open source repository: the self-hostable
+clipping pipeline behind [OpenShorts.io](https://openshorts.io), maintained
+as a fork of
+[OpenShorts](https://github.com/mutonby/openshorts) by mutonby, which is
+MIT-licensed. It keeps the whole upstream application:
 the clip generator, the dashboard, AI Shorts, YouTube Studio, the MCP server
 and the API. On top of that it adds the generic improvements we built while
-running the pipeline in production at [openshorts.io](https://openshorts.io):
+running the pipeline in production at [OpenShorts.io](https://openshorts.io):
 
 | Change | What it does | Turn it on |
 |---|---|---|
@@ -26,7 +29,7 @@ Each change is a separate commit on top of upstream, with tests. See
 [CHANGELOG.md](CHANGELOG.md).
 
 > **Hosted version:** if you would rather not run it yourself,
-> [openshorts.io](https://openshorts.io) runs this pipeline on GPUs. Paste a
+> [OpenShorts.io](https://openshorts.io) runs this pipeline on GPUs. Paste a
 > YouTube, TikTok, Instagram or Facebook link, or use its API and MCP server.
 
 ## Quick start (Docker)
@@ -148,5 +151,5 @@ MIT, see [LICENSE](LICENSE) and [NOTICE](NOTICE). OpenShorts is by mutonby
 and its contributors; the original project, its documentation and its hosted
 service live at [github.com/mutonby/openshorts](https://github.com/mutonby/openshorts).
 The full upstream history is kept in this repository, minus `cloud/`. This
-fork is maintained by the openshorts.io team. It is not affiliated with or
+fork is maintained by the OpenShorts.io team. It is not affiliated with or
 endorsed by the upstream project.

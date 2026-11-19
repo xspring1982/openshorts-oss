@@ -1,4 +1,4 @@
-// Clip a video with the hosted openshorts.io MCP endpoint (Node 18+, no dependencies).
+// Clip a video with the hosted OpenShorts.io MCP endpoint (Node 18+, no dependencies).
 //
 //   export OPENSHORTS_API_KEY=os_...
 //   npx tsx clip_video.ts "https://www.youtube.com/watch?v=..." [9:16|4:5|1:1|16:9]
