@@ -31,6 +31,7 @@ import hook_grounding
 import layout_picker
 import llm_backend
 import output_aspect
+import usage_meter
 import yt_account
 import twitch_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
@@ -2736,6 +2737,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     output_format = args.format
+    # Fork: every Gemini call's cost to GEMINI_USAGE_FILE, when set.
+    usage_meter.install()
 
     script_start_time = time.time()
 
