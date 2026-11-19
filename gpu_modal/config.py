@@ -10,9 +10,9 @@ def _env(name, default):
     return (os.environ.get(name) or default).strip()
 
 
-APP_NAME = _env("OSGPU_APP", "openshorts-gpu")
-VOLUME_NAME = _env("OSGPU_VOLUME", "openshorts-gpu-io")
-CACHE_VOLUME_NAME = _env("OSGPU_CACHE_VOLUME", "openshorts-gpu-models")
+APP_NAME = _env("OSGPU_APP", "openshorts-oss-gpu")
+VOLUME_NAME = _env("OSGPU_VOLUME", "openshorts-oss-io")
+CACHE_VOLUME_NAME = _env("OSGPU_CACHE_VOLUME", "openshorts-oss-models")
 SECRET_NAME = _env("OSGPU_SECRET", "openshorts")
 # GPU types in order of preference; Modal takes the first one with capacity.
 GPUS = [g.strip() for g in _env("OSGPU_GPUS", "L4,A10").split(",") if g.strip()]
@@ -27,5 +27,5 @@ CPU_FUNCTION_TIMEOUT_S = 2 * 60 * 60
 RUN_ENV_KEYS = (
     "OUTPUT_ASPECT", "CAPTION_PRESET", "CAPTION_HIGHLIGHT", "CAPTION_FONT", "AUTO_HOOK",
     "AUTO_CAPTIONS", "GEMINI_MODEL", "CLIP_TARGET_MIN", "CLIP_TARGET_MAX", "TRANSCRIBE_BACKEND",
-    "AUDIO_FIRST",
+    "AUDIO_FIRST", "MAX_SOURCE_MINUTES",
 )
