@@ -102,7 +102,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Deno JS runtime — required by yt-dlp for some extractor challenges.
-COPY --from=denoland/deno:bin@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 /deno /usr/local/bin/deno
+# Fork: digest only (the image of the deno:bin tag); Modal's builder refuses a
+# COPY --from source with both a tag and a digest.
+COPY --from=denoland/deno@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 /deno /usr/local/bin/deno
 
 # Helper token provider, baked in as a local Node script (no separate service).
 RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider /opt/bgutil-provider \

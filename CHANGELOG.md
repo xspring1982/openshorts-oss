@@ -4,6 +4,19 @@ Changes this fork makes on top of [OpenShorts](https://github.com/mutonby/opensh
 Upstream's own changes are in its history, which this repository keeps.
 Versions follow [Semantic Versioning](https://semver.org/); dates are UTC.
 
+## [Unreleased]
+
+### Fixed
+- Dockerfile: the Deno `COPY --from` uses a digest-only reference, which
+  Modal's image builder accepts (it refuses tag plus digest). Same image.
+- gpu_modal: default Modal names are `openshorts-oss-*`, so a deploy cannot
+  replace an existing app called `openshorts-gpu` in the same workspace.
+
+### Added
+- gpu_modal: `MAX_SOURCE_MINUTES` as a run setting.
+- gpu_modal/README.md: a run measured with this repository (A10, GPU
+  transcription included): 3 clips in 111 s, about $0.027 of Modal.
+
 ## [0.1.0] - 2026-11-19
 
 Based on upstream `main` at "feat(billing): connecting social accounts is a

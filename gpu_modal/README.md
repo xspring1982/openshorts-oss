@@ -50,15 +50,17 @@ Deploy-time settings, from the environment: `OSGPU_GPUS` (default `L4,A10`),
 are billed), and the names `OSGPU_APP`, `OSGPU_SECRET`, `OSGPU_VOLUME`,
 `OSGPU_CACHE_VOLUME`. Use the same values for the client.
 
-## Measured costs (openshorts.io, November 2026)
+## Measured costs (November 2026)
 
-The hosted service openshorts.io measured these on the same pipeline with an
-L4 or A10 container (4 physical cores, 16 GiB) and `CLIP_WORKERS=3`. Wall time
+The first row was measured with this repository's Modal backend; the others
+were measured by the hosted service openshorts.io on the same pipeline, all
+with an L4 or A10 container (4 physical cores, 16 GiB) and `CLIP_WORKERS=3`. Wall time
 runs from the call to the result and includes the cold start. Cost is wall
 time multiplied by the container's list price, an upper bound.
 
 | Source | GPU | Wall | Clips | Cost | Per clip |
 |---|---|---|---|---|---|
+| **This repository**, first 3 min of the same source by URL, transcription on the GPU included, first call on a new image (2026-11-19) | A10 | 111 s (68 s billed) | 3 | $0.027 + $0.006 Gemini | $0.011 |
 | 3 min (NASA *Black Hole 101*, public domain) | L4 | 100 s | 3 | $0.031 | $0.010 |
 | 10 min, same source | L4 | 111 s | 6 | $0.034 | $0.006 |
 | First call on a newly built image | L4 | 311–412 s | 3–6 | $0.10–0.13 | |
@@ -71,9 +73,10 @@ time multiplied by the container's list price, an upper bound.
 - Render time is about 60 s fixed plus about 10 s per clip, almost independent
   of the source length. On 4 shared vCPUs the same pipeline needed 45–60
   minutes for a 10-minute source.
-- **These figures exclude transcription**, which ran on Groq's API there.
-  Whisper `large-v3-turbo` on the GPU adds an estimated 30–60 s of L4 time per
-  20 minutes of audio (not yet measured here). Put `GROQ_API_KEY` in the
+- **The openshorts.io figures exclude transcription**, which ran on Groq's
+  API there. The first row was measured with this repository and includes
+  Whisper `large-v3-turbo` on the GPU, the download of the source and the
+  first call on a freshly built image. Put `GROQ_API_KEY` in the
   secret and pass `--env TRANSCRIBE_BACKEND=groq` to transcribe on Groq first.
   Local faster-whisper remains the fallback.
 - **GPU capacity is not guaranteed.** On one day, 3 of 8 L4 calls waited 8–30
