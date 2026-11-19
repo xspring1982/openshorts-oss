@@ -24,8 +24,29 @@ output/
 .idea/
 .vscode/
 
-# Secrets
+# Secrets (fork: broad on purpose; only *.example files are committed)
 .env
+.env.*
+!.env.example
+*.env
+!*.env.example
+.dev.vars
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+id_ed25519*
+modal.env
+.modal.toml
+credentials*
+*credentials*.json
+service-account*.json
+*.secret
+secrets/
+cookies*.txt
+*.cookies
 
 # Generated metadata
 *_metadata.json
