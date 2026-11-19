@@ -28,6 +28,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # Fork: upstream's cloud/ is not MIT-licensed and must never come back.
+      - name: No cloud/ directory
+        run: test -z "$(git ls-files cloud docker-compose.cloud.yml)"
+      # ffmpeg for the fork's audio-first DASH test (it skips without it).
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       # Everything the collected tests import at module level, WITHOUT the
       # heavy ML stack (torch/ultralytics/mediapipe/faster-whisper) — the
       # pipeline modules import those lazily behind their feature gates, and

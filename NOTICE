@@ -1,8 +1,15 @@
-OpenShorts
-Copyright (c) 2024 OpenShorts
+OpenShorts (fork with the openshorts.io pipeline improvements)
 
-The OpenShorts core application is licensed under the MIT License (see LICENSE).
+OpenShorts: Copyright (c) 2024 OpenShorts (mutonby and contributors),
+https://github.com/mutonby/openshorts, licensed under the MIT License
+(see LICENSE).
 
-EXCEPTION: All content that resides under the "cloud/" directory of this
-repository is licensed under the license defined in "cloud/LICENSE"
-(the OpenShorts Commercial License), not under the MIT License.
+Fork changes: Copyright (c) 2026 the openshorts.io team, also licensed under
+the MIT License.
+
+Upstream's "cloud/" directory is licensed under the OpenShorts Commercial
+License, not the MIT License. This repository does not contain it: it was
+removed from every commit when the fork was made, and the remaining code runs
+without it. Nothing here is offered under that license.
+
+This fork is not affiliated with or endorsed by the upstream project.

@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+> Fork note: this repository is a fork of mutonby/openshorts without the
+> `cloud/` directory (see README "Limits and differences from upstream").
+> Mentions of `cloud/` below describe upstream.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
