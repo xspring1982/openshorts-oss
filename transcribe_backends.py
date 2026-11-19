@@ -848,6 +848,18 @@ def transcribe_media(media_path):
 
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
 
+    # Fork: hosted Whisper on Groq, local faster-whisper on any failure.
+    if backend == "groq":
+        import groq_asr
+        try:
+            transcript = groq_asr.transcribe(media_path)
+            print(f"🎙️ [ASR] groq ok: lang={transcript['language']} "
+                  f"segments={len(transcript['segments'])}")
+            return transcript
+        except Exception as e:
+            print(f"⚠️ [ASR] groq failed ({type(e).__name__}: {e}) — "
+                  f"falling back to local whisper")
+
     if backend == "parakeet":
         try:
             transcript = _transcribe_with_parakeet(media_path)
