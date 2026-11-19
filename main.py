@@ -1392,7 +1392,13 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         import subtitles as _subs
         # ``style``: a CAPTION_PRESETS entry to burn instead of the default
         # look (pro mode's captions); what it does not name stays the default.
-        style = {**_subs.AUTO_CAPTION_STYLE, **(style or {})}
+        # Fork: this run's preset, colour and script font (run_caption_style)
+        # sit between the default and a per-clip style, and the result is
+        # sized for the output aspect ratio (fit_caption_style).
+        style = {**_subs.AUTO_CAPTION_STYLE,
+                 **_subs.run_caption_style(transcript.get('language')),
+                 **(style or {})}
+        style = _subs.fit_caption_style(style)
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())

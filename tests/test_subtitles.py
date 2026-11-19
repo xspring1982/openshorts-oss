@@ -323,14 +323,15 @@ class TestAutoCaptionDefaults:
         assert generate_ass(self._t(words), 0, 10, str(out)) is True
         style_line = [l for l in out.read_text(encoding="utf-8-sig").splitlines()
                       if l.startswith("Style: Default")][0]
-        assert f",10,10,{SAFE_MARGIN_V},1" in style_line
+        # Encoding -1 (fork): libass applies Unicode bidi to the whole line.
+        assert f",10,10,{SAFE_MARGIN_V},-1" in style_line
 
     def test_margin_is_overridable(self, tmp_path):
         from subtitles import generate_ass
         out = tmp_path / "subs.ass"
         assert generate_ass(self._t([_w(" hola", 0.0, 0.5)]), 0, 10, str(out),
                             margin_v=90) is True
-        assert ",10,10,90,1" in out.read_text(encoding="utf-8-sig")
+        assert ",10,10,90,-1" in out.read_text(encoding="utf-8-sig")
 
     @staticmethod
     def _t(words):

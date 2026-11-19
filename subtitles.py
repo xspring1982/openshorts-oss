@@ -11,6 +11,34 @@ import output_aspect
 
 _STDIO_CONFIGURED = False
 
+# Fork: captions for Chinese, Japanese, Korean and other scripts.
+# Thai, Lao, Myanmar, Khmer, kana, CJK ideographs/punctuation and full-width
+# forms are written without spaces between words.
+_NOSPACE_RE = re.compile(r'[฀-໿က-႟ក-៿　-ヿ㐀-䶿一-鿿豈-﫿＀-￯]')
+# Wide glyphs (the above plus Hangul) take about two Latin character widths.
+_WIDE_RE = re.compile(r'[ᄀ-ᇿ　-ヿ㄰-㆏㐀-䶿一-鿿가-힯豈-﫿＀-￯]')
+_ASS_TAG_RE = re.compile(r'\{[^}]*\}')
+
+
+def _visual_len(text):
+    """Characters, counting a CJK glyph as two (it is about twice as wide)."""
+    return sum(2 if _WIDE_RE.match(ch) else 1 for ch in str(text or ''))
+
+
+def _join_words(parts):
+    """Join caption words: a space between words, none between two CJK words."""
+    out, prev_bare = '', ''
+    for part in parts:
+        part = str(part).strip()
+        bare = _ASS_TAG_RE.sub('', part).strip()
+        if out and not (prev_bare and bare and _NOSPACE_RE.match(prev_bare[-1])
+                        and _NOSPACE_RE.match(bare[0])):
+            out += ' '
+        out += part
+        if bare:
+            prev_bare = bare
+    return out
+
 # Shared faster-whisper config so both transcription paths (this module and
 # main.transcribe_video) behave identically. "small" is meaningfully better at
 # German than "base" without being much slower on CPU.
@@ -192,12 +220,12 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
             block_start = word['start']
             continue
 
-        current_text_len = sum(len(w['word']) + 1 for w in current_block)
+        current_text_len = sum(_visual_len(w['word']) + 1 for w in current_block)
         duration = word['end'] - block_start
 
         too_wide = fits is not None and not fits(
             [w['word'] for w in current_block] + [word['word']])
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration or too_wide:
+        if current_text_len + _visual_len(word['word']) > max_chars or duration > max_duration or too_wide:
             blocks.append(current_block)
             current_block = [word]
             block_start = word['start']
@@ -220,7 +248,7 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
 
     srt_content = ""
     for index, block in enumerate(blocks, 1):
-        text = " ".join(w['word'] for w in block).strip()
+        text = _join_words([w['word'] for w in block]).strip()
         srt_content += format_srt_block(index, block[0]['start'], block[-1]['end'], text)
 
     # Write UTF-8 with BOM so Windows/FFmpeg subtitle readers reliably detect Unicode text.
@@ -304,6 +332,60 @@ CAPTION_PRESETS = {
               "effect": "none", "uppercase": False, "base_opacity": 0.7,
               "max_chars": 12},
 }
+
+# ---- Fork: this run's caption look -------------------------------------------
+# Fonts set explicitly for scripts the preset fonts lack, so a caption never
+# mixes glyphs from several fallback fonts (that breaks Arabic letter joining).
+# All come with the Noto packages the Dockerfile installs.
+LANG_FONTS = {
+    "ar": "Noto Sans Arabic", "ur": "Noto Sans Arabic", "fa": "Noto Sans Arabic",
+    "he": "Noto Sans Hebrew", "hi": "Noto Sans Devanagari", "mr": "Noto Sans Devanagari",
+    "ne": "Noto Sans Devanagari", "bn": "Noto Sans Bengali", "th": "Noto Sans Thai",
+    "zh": "Noto Sans CJK SC", "ja": "Noto Sans CJK JP", "ko": "Noto Sans CJK KR",
+}
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def run_caption_style(language=None, env=None):
+    """Overrides for this run's automatic captions, from the environment:
+
+    CAPTION_PRESET     a CAPTION_PRESETS name (hormozi, pill, lime, ...)
+    CAPTION_HIGHLIGHT  colour of the active word, #RRGGBB
+    CAPTION_FONT       font name; without it, a script font for the
+                       transcript's language (LANG_FONTS)
+    """
+    env = os.environ if env is None else env
+    out = {}
+    preset = (env.get("CAPTION_PRESET") or "").strip()
+    if preset and preset != "default" and preset in CAPTION_PRESETS:
+        out.update(CAPTION_PRESETS[preset])
+    highlight = (env.get("CAPTION_HIGHLIGHT") or "").strip()
+    if _HEX_COLOR.match(highlight):
+        out["highlight_color"] = highlight
+    font = (env.get("CAPTION_FONT") or "").strip()
+    lang = str(language or "").lower().replace("_", "-").split("-")[0]
+    if font:
+        out["font_name"] = font
+    elif lang in LANG_FONTS:
+        out["font_name"] = LANG_FONTS[lang]
+        if lang in ("ar", "ur", "fa", "he"):
+            out["uppercase"] = False  # no case, and upper() can break joining
+    return out
+
+
+def fit_caption_style(style, env=None):
+    """``style`` with font size and line length scaled for the output aspect
+    ratio (output_aspect.py); unchanged at 9:16."""
+    scale = output_aspect.caption_scale(env)
+    chars = output_aspect.caption_chars(env)
+    if scale == 1 and chars == 1:
+        return style
+    out = dict(style)
+    out["font_size"] = max(12, round(out["font_size"] * scale))
+    if out.get("max_chars", 0) > 1:
+        out["max_chars"] = max(6, round(out["max_chars"] * chars))
+    return out
+
 
 # Characters per line at font size 44, per font (Anton is condensed,
 # Montserrat wide). Mirrors lineBudget in SubtitleModal.jsx.
@@ -564,7 +646,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
             f"Style: Active,{safe_font},{final_fontsize},"
             f"{hex_to_ass_color(on_box, 1.0)},{hex_to_ass_color(on_box, 1.0)},"
             f"{box_colour},{box_colour},1,0,0,0,100,100,0,0,3,{pad},0,"
-            f"{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+            f"{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},-1\n"
         )
 
     header = (
@@ -583,7 +665,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
         f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},{shadow},{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+        f"{outline_width},{shadow},{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},-1\n"
         f"{active_style}"
         "\n"
         "[Events]\n"
@@ -623,7 +705,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
             events.append(
                 f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"{seam_prefix(ev_start)}{_join_words(parts)}"
             )
 
     if not events:

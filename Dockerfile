@@ -77,6 +77,8 @@ WORKDIR /app
 # fonts-noto-core (~42 MB) is the glyph fallback for every other script:
 # Arabic, Hebrew, Devanagari, Bengali, Thai... burned as tofu boxes without it
 # (issue #89). libass shapes and orders RTL text itself once a font has the glyphs.
+# fonts-noto-cjk (fork) carries Chinese, Japanese and Korean, which noto-core
+# lacks; subtitles.LANG_FONTS picks it for zh/ja/ko transcripts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
@@ -89,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig \
     fonts-liberation \
     fonts-noto-core \
+    fonts-noto-cjk \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
